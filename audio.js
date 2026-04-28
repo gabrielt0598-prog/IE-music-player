@@ -209,7 +209,7 @@ export class AudioEngine {
   }
 
   getBeat() {
-    if (!this.analyser) return this._clockBeat();
+    if (!this.analyser) return 0;
 
     this.analyser.getByteFrequencyData(this.freqData);
 
@@ -227,9 +227,8 @@ export class AudioEngine {
     avg /= this._beatHistory.length;
 
     if (energy > 0.02) {
-      // Live audio signal — use energy-based detection
       const now = performance.now();
-      if (energy > avg * 1.35 && energy > 0.02 && now - this._beatLastAt > 220) {
+      if (energy > avg * 1.35 && now - this._beatLastAt > 220) {
         this._beatPulse = 1.0;
         this._beatLastAt = now;
       }
@@ -237,8 +236,7 @@ export class AudioEngine {
       return this._beatPulse;
     }
 
-    // No signal — fall back to BPM clock
-    return this._clockBeat();
+    return 0;
   }
 
   // ── Controls ────────────────────────────────────────────────────────────────
