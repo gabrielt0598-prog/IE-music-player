@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Particle DJ — Audio Visualizer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="main-app">
+
+      <!-- Header -->
+      <header id="header">
+        <div id="track-info">
+          <span id="track-name">No track loaded</span>
+        </div>
+
+        <div id="app-title">◉ PARTICLE DJ</div>
+
+        <div id="playback-controls">
+          <button id="play-pause-btn" title="Play / Pause">⏯</button>
+          <button id="file-open-btn" title="Open audio file">📂</button>
+          <input id="file-input" type="file" accept="audio/*" hidden>
+        </div>
+      </header>
+
+      <!-- Visualizer Area -->
+      <div id="visualizer-container">
+        <canvas id="controls-canvas"></canvas>
+
+        <!-- Drop zone — hidden once a file is loaded -->
+        <div id="drop-zone">
+          <div id="drop-inner">
+            <div id="drop-icon">◉</div>
+            <p>Drop an audio file here</p>
+            <p class="drop-sub">MP3 · WAV · FLAC · OGG</p>
+            <button id="file-btn">Choose File</button>
+          </div>
+        </div>
+
+        <!-- Hand tracking overlays -->
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="hand-canvas"></canvas>
+
+        <div id="hand-cursor"></div>
+        <div id="hand-cursor-2"></div>
+
+        <div id="status-bar"></div>
+
+        <button id="hand-toggle" title="Toggle hand tracking">&#9995;</button>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
