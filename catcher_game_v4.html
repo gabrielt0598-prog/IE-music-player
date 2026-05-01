@@ -1,0 +1,433 @@
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+#container { position: relative; width: 100%; height: 560px; background: #0a0a0a; border-radius: 12px; overflow: hidden; font-family: sans-serif; }
+#canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+#startScreen, #endScreen {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 16px; color: #fff;
+  background: rgba(0,0,0,0.92); border-radius: 12px;
+}
+#startScreen h2, #endScreen h2 { font-size: 26px; font-weight: 600; letter-spacing: 1px; }
+#startScreen p { font-size: 14px; color: rgba(255,255,255,0.5); max-width: 280px; text-align: center; line-height: 1.7; }
+#endScreen p { font-size: 14px; color: rgba(255,255,255,0.5); max-width: 280px; text-align: center; line-height: 1.7; }
+.start-btn { background: rgba(236,72,153,0.85); border: none; color: #fff; padding: 12px 32px; border-radius: 24px; font-size: 15px; cursor: pointer; }
+.start-btn:hover { background: rgb(236,72,153); }
+#endScreen { display: none; }
+#score-big { font-size: 64px; font-weight: 700; color: rgba(236,72,153,0.95); }
+#hand-icon { font-size: 48px; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 0.4; transform: scale(1); } 50% { opacity: 1; transform: scale(1.15); } }
+</style>
+
+<div id="container">
+  <canvas id="canvas"></canvas>
+
+  <div id="startScreen">
+    <h2>Ball Catcher</h2>
+    <p>Click below to enable your camera — then raise your hand to begin!</p>
+    <button class="start-btn" onclick="enableCamera()">Enable Camera</button>
+  </div>
+
+  <div id="endScreen">
+    <h2>Time's Up!</h2>
+    <div id="score-big">0</div>
+    <p id="end-msg">balls caught</p>
+    <button class="start-btn" onclick="restartGame()">Play Again</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const container = document.getElementById('container');
+
+let W, H;
+let balls = [], ripples = [], spawnTimer = 0, score = 0;
+let gameState = 'idle'; // idle | waiting | countdown | playing | end
+let countdownVal = 3, countdownTimer = 0;
+let gameTimer = 60;
+let audioCtx = null;
+let platformX, platformVX = 0, prevHandX = null;
+let handVisible = false;
+let waitingDots = 0, waitingDotsTimer = 0;
+
+const PLATFORM_Y_OFFSET = 70;
+const PLATFORM_HALF_W = 75;
+const RIM_H = 12;
+const RIM_W = 8;
+const GAME_DURATION = 60;
+
+const BALL_TYPES = [
+  { hue: 330, baseFreq: 120, rMin: 8,  rMax: 13 },
+  { hue: 45,  baseFreq: 180, rMin: 6,  rMax: 10 },
+  { hue: 190, baseFreq: 220, rMin: 10, rMax: 16 },
+  { hue: 270, baseFreq: 90,  rMin: 12, rMax: 18 },
+];
+
+function resize() {
+  const r = container.getBoundingClientRect();
+  W = canvas.width = r.width;
+  H = canvas.height = r.height;
+  if (!platformX) platformX = W / 2;
+}
+setTimeout(resize, 80);
+window.addEventListener('resize', resize);
+
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playDrum(baseFreq, impact) {
+  const ac = getAudio();
+  const t = ac.currentTime;
+  const osc = ac.createOscillator();
+  const oscGain = ac.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(baseFreq * 3, t);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq, t + 0.07);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.4, t + 0.3);
+  oscGain.gain.setValueAtTime(0.6 + impact * 0.4, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  osc.connect(oscGain); oscGain.connect(ac.destination);
+  osc.start(t); osc.stop(t + 0.35);
+
+  const bufSize = ac.sampleRate * 0.05;
+  const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ac.createBufferSource();
+  noise.buffer = buf;
+  const nf = ac.createBiquadFilter();
+  nf.type = 'bandpass'; nf.frequency.value = 200 + impact * 400; nf.Q.value = 0.8;
+  const ng = ac.createGain();
+  ng.gain.setValueAtTime(0.35 + impact * 0.3, t);
+  ng.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+  noise.connect(nf); nf.connect(ng); ng.connect(ac.destination);
+  noise.start(t); noise.stop(t + 0.05);
+}
+
+function playCountdownBeep(freq) {
+  const ac = getAudio();
+  const t = ac.currentTime;
+  const osc = ac.createOscillator();
+  const g = ac.createGain();
+  osc.frequency.value = freq; osc.type = 'sine';
+  g.gain.setValueAtTime(0.3, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+  osc.connect(g); g.connect(ac.destination);
+  osc.start(t); osc.stop(t + 0.15);
+}
+
+function spawnRipple(x, y, hue) {
+  for (let i = 0; i < 3; i++) {
+    ripples.push({ x, y, hue, r: 0, maxR: 55 + i * 22, alpha: 0.85, delay: i * 0.08, elapsed: 0, done: false });
+  }
+}
+
+function updateRipples(dt) {
+  for (const rp of ripples) {
+    rp.elapsed += dt;
+    if (rp.elapsed < rp.delay) continue;
+    const progress = Math.min((rp.elapsed - rp.delay) / 0.55, 1);
+    rp.r = rp.maxR * progress;
+    rp.alpha = (1 - progress) * 0.75;
+    if (progress >= 1) rp.done = true;
+  }
+  ripples = ripples.filter(rp => !rp.done);
+}
+
+function drawRipples() {
+  for (const rp of ripples) {
+    if (rp.elapsed < rp.delay) continue;
+    ctx.beginPath();
+    ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${rp.hue}, 90%, 72%, ${rp.alpha})`;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+  }
+}
+
+class Ball {
+  constructor() {
+    const type = BALL_TYPES[Math.floor(Math.random() * BALL_TYPES.length)];
+    this.r = type.rMin + Math.random() * (type.rMax - type.rMin);
+    this.x = this.r + Math.random() * (W * 0.45);
+    this.y = -this.r - Math.random() * 40;
+    this.vx = (Math.random() - 0.3) * 1.0;
+    this.vy = 0.2 + Math.random() * 0.4;
+    this.hue = type.hue;
+    this.baseFreq = type.baseFreq;
+    this.alive = true;
+    this.catching = false;
+    this.catchAlpha = 1;
+    this.catchScale = 1;
+  }
+
+  getPlatY()  { return H - PLATFORM_Y_OFFSET; }
+  getPlatX1() { return platformX - PLATFORM_HALF_W; }
+  getPlatX2() { return platformX + PLATFORM_HALF_W; }
+
+  catch() {
+    if (this.catching) return;
+    this.catching = true;
+    score++;
+    playDrum(this.baseFreq, 0.7);
+    spawnRipple(this.x, this.getPlatY(), this.hue);
+  }
+
+  update(dt) {
+    if (this.catching) {
+      this.catchScale -= dt * 6;
+      this.catchAlpha -= dt * 6;
+      if (this.catchAlpha <= 0) this.alive = false;
+      return;
+    }
+    this.vy += 0.06;
+    this.vx *= 0.999;
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < this.r) { this.x = this.r; this.vx = Math.abs(this.vx) * 0.5; }
+    if (this.x > W - this.r) { this.x = W - this.r; this.vx = -Math.abs(this.vx) * 0.5; }
+    if (this.y > H + 40) { this.alive = false; return; }
+    this.collidePlatform();
+    this.collideRims();
+  }
+
+  collidePlatform() {
+    const py = this.getPlatY(), x1 = this.getPlatX1(), x2 = this.getPlatX2();
+    if (this.x < x1 - this.r || this.x > x2 + this.r) return;
+    const dist = this.y - py;
+    if (dist > -this.r * 0.5 && dist < this.r * 1.8 && this.vy >= 0) this.catch();
+  }
+
+  collideRims() {
+    if (this.catching) return;
+    const py = this.getPlatY(), x1 = this.getPlatX1(), x2 = this.getPlatX2();
+    for (const rimX of [x1, x2]) {
+      if (Math.abs(this.x - rimX) < this.r + RIM_W / 2 && this.y > py - RIM_H - this.r && this.y < py + this.r) {
+        const side = rimX === x1 ? 1 : -1;
+        this.x = rimX + side * (this.r + RIM_W / 2);
+        this.vx = Math.abs(this.vx) * side * 0.5;
+      }
+    }
+  }
+
+  draw() {
+    const alpha = this.catching ? Math.max(0, this.catchAlpha) : 1;
+    const scale = this.catching ? Math.max(0, this.catchScale) : 1;
+    const drawY = this.catching ? this.getPlatY() : this.y;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(this.x, drawY);
+    ctx.scale(scale, scale);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
+    const grad = ctx.createRadialGradient(-this.r*0.3, -this.r*0.3, this.r*0.1, 0, 0, this.r);
+    grad.addColorStop(0, `hsl(${this.hue},90%,88%)`);
+    grad.addColorStop(1, `hsl(${this.hue},80%,55%)`);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawPlatform() {
+  const py = H - PLATFORM_Y_OFFSET;
+  const x1 = platformX - PLATFORM_HALF_W, x2 = platformX + PLATFORM_HALF_W;
+  const grad = ctx.createLinearGradient(x1, py, x2, py);
+  grad.addColorStop(0, 'rgba(236,72,153,0)');
+  grad.addColorStop(0.5, 'rgba(236,72,153,0.95)');
+  grad.addColorStop(1, 'rgba(236,72,153,0)');
+  ctx.beginPath(); ctx.moveTo(x1, py); ctx.lineTo(x2, py);
+  ctx.strokeStyle = 'rgba(236,72,153,0.12)'; ctx.lineWidth = 18; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1, py); ctx.lineTo(x2, py);
+  ctx.strokeStyle = grad; ctx.lineWidth = 4; ctx.lineCap = 'butt'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1, py); ctx.lineTo(x1, py - RIM_H);
+  ctx.strokeStyle = 'rgba(236,72,153,0.8)'; ctx.lineWidth = RIM_W; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x2, py); ctx.lineTo(x2, py - RIM_H);
+  ctx.strokeStyle = 'rgba(236,72,153,0.8)'; ctx.lineWidth = RIM_W; ctx.lineCap = 'round'; ctx.stroke();
+}
+
+function drawWaiting(dt) {
+  // Animated "raise your hand" prompt on canvas
+  waitingDotsTimer += dt;
+  if (waitingDotsTimer > 0.5) { waitingDots = (waitingDots + 1) % 4; waitingDotsTimer = 0; }
+  const dots = '.'.repeat(waitingDots);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Hand emoji-style icon — draw a simple hand silhouette
+  const cx = W / 2, cy = H / 2 - 40;
+  const t = Date.now() / 1000;
+  const bob = Math.sin(t * 2) * 6;
+
+  ctx.font = '52px sans-serif';
+  ctx.fillStyle = `rgba(255,255,255,${0.5 + Math.sin(t * 2) * 0.3})`;
+  ctx.fillText('🖐', cx, cy + bob);
+
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('Raise your hand to start' + dots, cx, cy + bob + 52);
+
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawCountdown() {
+  ctx.font = 'bold 90px sans-serif';
+  ctx.fillStyle = 'rgba(236,72,153,0.9)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(countdownVal > 0 ? countdownVal : 'GO!', W / 2, H / 2);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawHUD() {
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Caught: ${score}`, 20, 38);
+  const secs = Math.ceil(gameTimer);
+  ctx.fillStyle = secs <= 10 ? 'rgba(236,72,153,0.95)' : 'rgba(255,255,255,0.7)';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${secs}s`, W - 20, 38);
+}
+
+function drawBackground() {
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0d0d14');
+  bg.addColorStop(1, '#0a0a0a');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  if (gameState === 'playing') {
+    ctx.fillStyle = 'rgba(255,255,255,0.015)';
+    ctx.fillRect(0, 0, W * 0.5, H);
+  }
+}
+
+let lastTime = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  drawBackground();
+
+  if (gameState === 'waiting') {
+    drawPlatform();
+    drawWaiting(dt);
+    return;
+  }
+
+  if (gameState === 'countdown') {
+    countdownTimer += dt;
+    if (countdownTimer >= 1) {
+      countdownTimer = 0;
+      countdownVal--;
+      if (countdownVal >= 0) playCountdownBeep(countdownVal === 0 ? 660 : 440);
+      if (countdownVal < 0) { gameState = 'playing'; gameTimer = GAME_DURATION; }
+    }
+    drawPlatform();
+    drawCountdown();
+    return;
+  }
+
+  if (gameState === 'playing') {
+    gameTimer -= dt;
+    if (gameTimer <= 0) { gameTimer = 0; endGame(); return; }
+
+    spawnTimer += dt;
+    const spawnInterval = 1.4 + Math.random() * 1.8;
+    if (spawnTimer >= spawnInterval) { balls.push(new Ball()); spawnTimer = 0; }
+
+    balls = balls.filter(b => b.alive);
+    for (const b of balls) { b.update(dt); b.draw(); }
+
+    updateRipples(dt);
+    drawRipples();
+    drawPlatform();
+    drawHUD();
+  }
+}
+
+function endGame() {
+  gameState = 'end';
+  document.getElementById('endScreen').style.display = 'flex';
+  document.getElementById('score-big').textContent = score;
+  document.getElementById('end-msg').textContent = score === 1 ? 'ball caught' : 'balls caught';
+}
+
+function restartGame() {
+  document.getElementById('endScreen').style.display = 'none';
+  balls = []; ripples = []; score = 0; spawnTimer = 0;
+  countdownVal = 3; countdownTimer = 0;
+  handVisible = false;
+  gameState = 'waiting';
+}
+
+let handTriggeredStart = false;
+
+function onHandResults(results) {
+  const detected = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+  handVisible = detected;
+
+  if (detected) {
+    const lms = results.multiHandLandmarks[0];
+    const xs = lms.map(l => (1 - l.x) * W);
+    const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const newX = Math.max(PLATFORM_HALF_W, Math.min(W - PLATFORM_HALF_W, cx));
+    if (prevHandX !== null) platformVX = (newX - prevHandX) * 0.6;
+    prevHandX = newX;
+    platformX = newX;
+
+    // Trigger countdown on first hand detection during waiting
+    if (gameState === 'waiting' && !handTriggeredStart) {
+      handTriggeredStart = true;
+      getAudio();
+      countdownVal = 3;
+      countdownTimer = 0;
+      gameState = 'countdown';
+    }
+  } else {
+    prevHandX = null;
+    platformVX = 0;
+  }
+}
+
+async function enableCamera() {
+  document.getElementById('startScreen').style.display = 'none';
+  resize();
+  platformX = W / 2;
+  gameState = 'waiting';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+    const video = document.createElement('video');
+    video.srcObject = stream; video.autoplay = true; video.muted = true; video.playsInline = true;
+    await video.play();
+    if (typeof Hands !== 'undefined') {
+      const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+      hands.onResults(onHandResults);
+      const cam = new Camera(video, { onFrame: async () => { await hands.send({ image: video }); }, width: 640, height: 480 });
+      cam.start();
+    }
+  } catch(e) { initMouseFallback(); }
+}
+
+function initMouseFallback() {
+  gameState = 'countdown'; countdownVal = 3; countdownTimer = 0;
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left;
+    const newX = Math.max(PLATFORM_HALF_W, Math.min(W - PLATFORM_HALF_W, mx));
+    platformVX = (newX - (platformX || newX)) * 0.6;
+    platformX = newX;
+  });
+}
+
+requestAnimationFrame(loop);
+</script>
