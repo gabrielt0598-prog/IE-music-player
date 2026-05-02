@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Controller</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+        #canvas { display: block; width: 100vw; height: 100vh; }
+
+        .ctrl-btn {
+            position: fixed;
+            left: 18px;
+            background: rgba(0,0,0,0.85);
+            border: 2.5px solid #fff;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1.5px;
+            padding: 9px 16px;
+            cursor: pointer;
+            z-index: 10;
+            text-transform: uppercase;
+            user-select: none;
+        }
+        .ctrl-btn:hover { background: rgba(40,40,40,0.95); }
+        #mute-btn { top: 18px; }
+        #load-btn { top: 58px; }
+        #file-input { display: none; }
+
+        #status {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%,-50%);
+            color: rgba(255,255,255,0.6);
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            pointer-events: none;
+            white-space: nowrap;
+            text-align: center;
+            line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <video id="video" style="display:none" autoplay playsinline muted></video>
+
+    <button id="mute-btn" class="ctrl-btn">MUTE</button>
+    <button id="load-btn" class="ctrl-btn">LOAD FILE</button>
+    <input  id="file-input" type="file" accept=".wav,.mp3,.ogg,.aiff">
+
+    <div id="status">Loading model...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js" crossorigin="anonymous"></script>
+
+    <script>
+        const canvas    = document.getElementById('canvas');
+        const ctx       = canvas.getContext('2d');
+        const video     = document.getElementById('video');
+        const muteBtn   = document.getElementById('mute-btn');
+        const loadBtn   = document.getElementById('load-btn');
+        const fileInput = document.getElementById('file-input');
+        const statusEl  = document.getElementById('status');
+
+        // Thumb tip = 4; finger tips: index=8, middle=12, ring=16, pinky=20
+        const PARAMS = [
+            { label: 'Rate',      idx: 8,  color: '#FF3355' },
+            { label: 'Pitch',     idx: 12, color: '#00DD88' },
+            { label: 'Sharpness', idx: 16, color: '#3399FF' },
+            { label: 'Space',     idx: 20, color: '#FFDD00' },
+        ];
+        const THUMB_IDX = 4;
+        const DOT_R = 8;
+
+        let muted = false;
+        let fistMuted = false;
+
+        function setGain() {
+            if (!toneGain) return;
+            const target = (muted || fistMuted) ? 0 : 1;
+            toneGain.gain.cancelScheduledValues(Tone.now());
+            toneGain.gain.linearRampTo(target, 0.005);
+        }
+
+        function resize() {
+            canvas.width  = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        muteBtn.addEventListener('click', () => {
+            muted = !muted;
+            setGain();
+            muteBtn.textContent = muted ? 'UNMUTE' : 'MUTE';
+        });
+
+        loadBtn.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+            await ensureTone();
+            const url = URL.createObjectURL(file);
+            await buildGrainPlayer(url);
+        });
+
+        document.addEventListener('click', () => {
+            if (typeof Tone !== 'undefined' && Tone.context.state === 'suspended') Tone.start();
+        });
+
+        // ── Audio ─────────────────────────────────────────────────────────────
+        // Graph: GrainPlayer → freqShifter → pitchLPF → pitchHPF → chebyshev → reverb → waveAnalyser → fftAnalyser → toneGain → Destination
+
+        let grainPlayer  = null;
+        let freqShifter  = null;
+        let pitchLPF     = null;
+        let pitchHPF     = null;
+        let chebyshev    = null;
+        let reverb       = null;
+        let waveAnalyser = null;
+        let fftAnalyser  = null;
+        let toneGain     = null;
+        let audioReady   = false;
+
+        async function ensureTone() {
+            if (Tone.context.state !== 'running') await Tone.start();
+            if (!waveAnalyser) {
+                waveAnalyser = new Tone.Analyser({ type: 'waveform', size: 2048, smoothing: 0 });
+                fftAnalyser  = new Tone.Analyser({ type: 'fft',      size: 1024, smoothing: 0 });
+                toneGain     = new Tone.Gain((muted || fistMuted) ? 0 : 1).toDestination();
+                freqShifter = new Tone.FrequencyShifter(0);
+                pitchLPF = new Tone.Filter({ frequency: 20000, type: 'lowpass',  rolloff: -12 });
+                pitchHPF = new Tone.Filter({ frequency: 10,    type: 'highpass', rolloff: -12 });
+                chebyshev = new Tone.Chebyshev({ order: 7, wet: 0 });
+                reverb    = new Tone.Reverb({ decay: 2, wet: 0 });
+                await reverb.ready;
+                freqShifter.connect(pitchLPF);
+                pitchLPF.connect(pitchHPF);
+                pitchHPF.connect(chebyshev);
+                chebyshev.connect(reverb);
+                reverb.connect(waveAnalyser);
+                waveAnalyser.connect(fftAnalyser);
+                fftAnalyser.connect(toneGain);
+            }
+        }
+
+        async function initAudio() {
+            await ensureTone();
+            if (!grainPlayer) {
+                try {
+                    await buildGrainPlayer('assets/test.wav');
+                } catch (e) {
+                    console.warn('auto-load failed — use LOAD FILE', e);
+                }
+            }
+        }
+
+        function buildGrainPlayer(source) {
+            return new Promise((resolve, reject) => {
+                if (grainPlayer) {
+                    try { grainPlayer.stop(); grainPlayer.disconnect(); grainPlayer.dispose(); } catch (_) {}
+                    grainPlayer = null;
+                    audioReady = false;
+                }
+                grainPlayer = new Tone.GrainPlayer({
+                    url:       source,
+                    loop:      false,
+                    grainSize: 0.1,
+                    overlap:   0.05,
+                    onload: () => {
+                        grainPlayer.connect(freqShifter);
+                        audioReady = true;
+                        resolve();
+                    },
+                    onerror: (e) => reject(e)
+                });
+            });
+        }
+
+        function triggerSound() {
+            if (!grainPlayer || !audioReady) return;
+            grainPlayer.stop();
+            grainPlayer.start();
+        }
+
+        // ── Hand scale reference ──────────────────────────────────────────────
+        // Wrist (0) → middle MCP (9): stable palm height, invariant to finger spreading.
+        // All finger distances are divided by this so the mapping is independent of
+        // how far the hand is from the camera.
+
+        function handScale(landmarks) {
+            const w = landmarks[0], m = landmarks[9];
+            return Math.hypot(w.x - m.x, w.y - m.y) || 0.001;
+        }
+
+        // ── Rate  (index finger, idx=8)  →  10–750 ms, curve: 10 × 75^norm ──
+        // Relative distance thresholds (fraction of palm height)
+
+        const RATE_REL_MIN = 0.20; // pinched  ≈ 20 % of palm height
+        const RATE_REL_MAX = 2.20; // spread   ≈ 220 % of palm height
+        const RATE_MS_MIN  = 10;
+        const RATE_MS_MAX  = 750;
+
+        let currentRateMs  = 500;
+        let currentRateNorm = 0;
+        let nextTriggerAt  = 0;
+        let handDetected   = false;
+
+        // Above this norm the trigger gate closes (sound off at max spread)
+        const RATE_SILENCE_THRESHOLD = 0.93;
+
+        function updateRate(landmarks) {
+            const scale = handScale(landmarks);
+            const t = landmarks[THUMB_IDX], i = landmarks[8];
+            const d = Math.hypot(t.x - i.x, t.y - i.y) / scale;
+            currentRateNorm = Math.max(0, Math.min(1, (d - RATE_REL_MIN) / (RATE_REL_MAX - RATE_REL_MIN)));
+            const r = RATE_MS_MIN * Math.pow(RATE_MS_MAX / RATE_MS_MIN, currentRateNorm);
+            if (r < currentRateMs) nextTriggerAt = Math.min(nextTriggerAt, performance.now() + r);
+            currentRateMs = r;
+        }
+
+        // ── Pitch (middle finger, idx=12)  →  −3000 to +3000 Hz, continuous ───
+        // Closer = lower pitch (−3000 Hz), spread = higher pitch (+3000 Hz)
+
+        const PITCH_REL_MIN = 0.20;
+        const PITCH_REL_MAX = 2.30;
+
+        let currentPitchHz = 0;
+
+        function pitchNorm(landmarks) {
+            const scale = handScale(landmarks);
+            const t = landmarks[THUMB_IDX], m = landmarks[12];
+            const d = Math.hypot(t.x - m.x, t.y - m.y) / scale;
+            return Math.max(0, Math.min(1, (d - PITCH_REL_MIN) / (PITCH_REL_MAX - PITCH_REL_MIN)));
+        }
+
+        function updatePitch(landmarks) {
+            if (!freqShifter || !audioReady) return;
+            const norm = pitchNorm(landmarks);
+            currentPitchHz = norm * 6000 - 3000; // −3000 … +3000 Hz, continuous
+            freqShifter.frequency.value = currentPitchHz;
+            // LPF: fully open (20kHz) above +500 Hz, closes to 200 Hz at -3000 Hz
+            const tLow = Math.min(1, Math.max(0, (currentPitchHz + 3000) / 3500));
+            pitchLPF.frequency.value = 200 + (20000 - 200) * tLow;
+            // HPF: off (10 Hz) below +1000 Hz, opens to 10kHz at +3000 Hz
+            const tHigh = Math.min(1, Math.max(0, (currentPitchHz - 1000) / 2000));
+            pitchHPF.frequency.value = 10 + (8000 - 10) * tHigh;
+        }
+
+        // ── Distort (ring finger, idx=16)  →  Chebyshev wet 0–0.75 ──────────
+
+        const CHEBY_REL_MIN = 0.15;
+        const CHEBY_REL_MAX = 2.20;
+        const CHEBY_WET_MAX = 0.75;
+
+        let currentChebWet = 0;
+
+        function updateChebyshev(landmarks) {
+            if (!chebyshev) return;
+            const scale = handScale(landmarks);
+            const t = landmarks[THUMB_IDX], r = landmarks[16];
+            const d = Math.hypot(t.x - r.x, t.y - r.y) / scale;
+            currentChebWet = Math.max(0, Math.min(1, (d - CHEBY_REL_MIN) / (CHEBY_REL_MAX - CHEBY_REL_MIN))) * CHEBY_WET_MAX;
+            chebyshev.wet.value = currentChebWet;
+        }
+
+        // ── Space (pinky finger, idx=20)  →  Reverb wet 0–0.30, power³ curve ─
+        // Power-of-3 keeps wet near-zero for most of the distance range and
+        // only climbs quickly as the pinky reaches full extension.
+
+        const REVERB_REL_MIN = 0.15;
+        const REVERB_REL_MAX = 2.20;
+        const REVERB_WET_MAX = 0.50;
+
+        let currentReverbWet = 0;
+
+        function updateReverb(landmarks) {
+            if (!reverb) return;
+            const scale = handScale(landmarks);
+            const t = landmarks[THUMB_IDX], p = landmarks[20];
+            const d = Math.hypot(t.x - p.x, t.y - p.y) / scale;
+            const norm = Math.max(0, Math.min(1, (d - REVERB_REL_MIN) / (REVERB_REL_MAX - REVERB_REL_MIN)));
+            currentReverbWet = REVERB_WET_MAX * (norm * norm * norm);
+            reverb.wet.value = currentReverbWet;
+        }
+
+        // ── Cover-fit helpers ─────────────────────────────────────────────────
+
+        function coverFit() {
+            const cw = canvas.width, ch = canvas.height;
+            const vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return null;
+            const scale = Math.max(cw / vw, ch / vh);
+            const fw = vw * scale, fh = vh * scale;
+            return { ox: (cw - fw) / 2, oy: (ch - fh) / 2, fw, fh, cw, ch };
+        }
+
+        function lmPx(lm, fit) {
+            return {
+                x: fit.cw - fit.ox - lm.x * fit.fw,
+                y: fit.oy + lm.y * fit.fh
+            };
+        }
+
+        // ── Draw ──────────────────────────────────────────────────────────────
+
+        function drawVideo(fit) {
+            ctx.save();
+            ctx.translate(fit.cw, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, fit.ox, fit.oy, fit.fw, fit.fh);
+            ctx.restore();
+        }
+
+        function drawHand(landmarks, fit) {
+            const thumb = lmPx(landmarks[THUMB_IDX], fit);
+
+            // Non-pitch params drawn first so pitch layer renders on top
+            PARAMS.forEach(p => {
+                if (p.idx === 12) return;
+                const tip = lmPx(landmarks[p.idx], fit);
+
+                ctx.beginPath();
+                ctx.moveTo(tip.x, tip.y);
+                ctx.lineTo(thumb.x, thumb.y);
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(tip.x, tip.y, DOT_R, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.fill();
+            });
+
+            // Pitch drawn last (on top): line + fingertip dot only
+            const pitchP   = PARAMS.find(p => p.idx === 12);
+            const pitchTip = lmPx(landmarks[12], fit);
+
+            ctx.beginPath();
+            ctx.moveTo(pitchTip.x, pitchTip.y);
+            ctx.lineTo(thumb.x, thumb.y);
+            ctx.strokeStyle = pitchP.color;
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(pitchTip.x, pitchTip.y, DOT_R, 0, Math.PI * 2);
+            ctx.fillStyle = pitchP.color;
+            ctx.fill();
+
+            // Thumb anchor dot
+            ctx.beginPath();
+            ctx.arc(thumb.x, thumb.y, DOT_R, 0, Math.PI * 2);
+            ctx.fillStyle = '#FFDD00';
+            ctx.fill();
+
+            // Labels at midpoint of each line
+            ctx.font = 'bold 20px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            PARAMS.forEach(p => {
+                const tip = lmPx(landmarks[p.idx], fit);
+                const mx = (tip.x + thumb.x) / 2;
+                const my = (tip.y + thumb.y) / 2;
+
+                const hz   = Math.round(currentPitchHz);
+                const text = (p.idx === 12)
+                    ? `Pitch ${hz > 0 ? '+' : ''}${hz} Hz`
+                    : (p.idx === 16)
+                    ? `Sharpness ${Math.round(currentChebWet * 100)}%`
+                    : (p.idx === 20)
+                    ? `Space ${Math.round(currentReverbWet * 100)}%`
+                    : p.label;
+
+                const tw = ctx.measureText(text).width, pad = 8, bh = 28;
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(mx - tw/2 - pad, my - bh/2, tw + pad*2, bh);
+                ctx.fillStyle = p.color;
+                ctx.fillText(text, mx, my + 1);
+            });
+        }
+
+        function drawWaveform() {
+            const wh   = Math.floor(canvas.height * 0.10);
+            const wy   = canvas.height - wh;
+            const half = canvas.width / 2;
+
+            ctx.fillStyle = 'rgba(0,0,0,0.78)';
+            ctx.fillRect(0, wy, canvas.width, wh);
+
+            // Divider
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(half, wy);
+            ctx.lineTo(half, wy + wh);
+            ctx.stroke();
+
+            if (!waveAnalyser || !fftAnalyser) {
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+                ctx.lineWidth = 1;
+                ctx.moveTo(0, wy + wh/2);
+                ctx.lineTo(canvas.width, wy + wh/2);
+                ctx.stroke();
+                return;
+            }
+
+            // Left: oscilloscope — getValue() returns Float32Array, −1…+1
+            const waveVals = waveAnalyser.getValue();
+            ctx.save();
+            ctx.beginPath(); ctx.rect(0, wy, half, wh); ctx.clip();
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+            ctx.lineWidth = 1.5;
+            const wStep = half / (waveVals.length - 1);
+            for (let i = 0; i < waveVals.length; i++) {
+                const x = i * wStep;
+                const y = wy + wh/2 + waveVals[i] * (wh/2) * 0.85;
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            // Right: FFT spectrum, log 20 Hz – 25 kHz
+            // getValue() returns Float32Array of dB values
+            const fftVals = fftAnalyser.getValue();
+            const numBins = fftVals.length;                      // 1024
+            const nyquist = Tone.context.sampleRate / 2;
+            const logMin  = Math.log(20);
+            const logMax  = Math.log(Math.min(25000, nyquist));
+
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+            ctx.lineWidth = 1.5;
+            for (let px = 0; px < half; px++) {
+                const freq = Math.exp(logMin + (px / (half - 1)) * (logMax - logMin));
+                const bin  = Math.min(numBins - 1, Math.round(freq / nyquist * numBins));
+                const amp  = Math.max(0, (fftVals[bin] + 80) / 80); // dB → 0–1
+                const x    = half + px;
+                const y    = wy + wh - amp * wh * 0.92;
+                px === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        // ── Fist detection ────────────────────────────────────────────────────
+        // A finger is curled when its tip is closer to the wrist than its MCP knuckle.
+        // This check is orientation-independent.
+
+        function isFistClosed(landmarks) {
+            const wrist = landmarks[0];
+            const fingerPairs = [
+                { tip: 8,  mcp: 5  },
+                { tip: 12, mcp: 9  },
+                { tip: 16, mcp: 13 },
+                { tip: 20, mcp: 17 },
+            ];
+            let curled = 0;
+            for (const { tip, mcp } of fingerPairs) {
+                const tipDist = Math.hypot(landmarks[tip].x - wrist.x, landmarks[tip].y - wrist.y);
+                const mcpDist = Math.hypot(landmarks[mcp].x - wrist.x, landmarks[mcp].y - wrist.y);
+                if (tipDist < mcpDist) curled++;
+            }
+            return curled >= 4;
+        }
+
+        // ── Results callback ──────────────────────────────────────────────────
+
+        function onResults(results) {
+            const fit = coverFit();
+            if (!fit) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawVideo(fit);
+
+            handDetected = !!(results.multiHandLandmarks?.length);
+
+            let anyFist = false;
+            if (handDetected) {
+                results.multiHandLandmarks.forEach(hand => {
+                    if (isFistClosed(hand)) anyFist = true;
+                    drawHand(hand, fit);
+                    updateRate(hand);
+                    updatePitch(hand);
+                    updateChebyshev(hand);
+                    updateReverb(hand);
+                });
+            }
+
+            if (anyFist !== fistMuted) {
+                fistMuted = anyFist;
+                setGain();
+            }
+
+            if (fistMuted) {
+                ctx.save();
+                ctx.font = 'bold 28px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const label = 'MUTED';
+                const tw = ctx.measureText(label).width;
+                const px = canvas.width / 2, py = 40;
+                ctx.fillStyle = 'rgba(0,0,0,0.75)';
+                ctx.fillRect(px - tw / 2 - 14, py - 20, tw + 28, 40);
+                ctx.fillStyle = '#FF3355';
+                ctx.fillText(label, px, py);
+                ctx.restore();
+            }
+
+            drawWaveform();
+        }
+
+        // ── MediaPipe + camera init ───────────────────────────────────────────
+
+        const hands = new Hands({
+            locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+        });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1,
+            minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        async function start() {
+            try {
+                await hands.initialize();
+                statusEl.textContent = 'Starting camera...';
+                if (!navigator.mediaDevices?.getUserMedia) {
+                    statusEl.textContent = 'Camera unavailable — open in Chrome or Safari.';
+                    return;
+                }
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                video.srcObject = stream;
+                await new Promise(r => { video.onloadedmetadata = r; });
+                await video.play();
+                statusEl.textContent = '';
+
+                async function loop() {
+                    const now = performance.now();
+                    if (audioReady && Tone.context.state === 'running' && handDetected && now >= nextTriggerAt && currentRateNorm < RATE_SILENCE_THRESHOLD) {
+                        triggerSound();
+                        nextTriggerAt = now + currentRateMs;
+                    }
+                    if (video.readyState >= 2) await hands.send({ image: video });
+                    requestAnimationFrame(loop);
+                }
+                requestAnimationFrame(loop);
+
+            } catch (e) {
+                statusEl.textContent = 'Error: ' + e.message;
+                console.error(e);
+            }
+        }
+
+        start();
+    </script>
+</body>
+</html>
