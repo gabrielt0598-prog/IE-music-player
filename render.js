@@ -26,6 +26,11 @@ const Renderer = (() => {
   const STYLE_NAMES    = ['Orbit', 'Signal', 'Scan', 'Grid', 'Pulse'];
   let bucketStyleIndex = 4;
 
+  // ── background color (set by pinch gesture) ───────────────────────────────
+  let bgColor = [0, 0, 0];
+
+  function setBgMode(rgb) { bgColor = rgb; }
+
   // particles: [{x,y,vx,vy,life,maxLife,color}]
   const particles = [];
   const MAX_PARTICLES = 200;
@@ -88,26 +93,34 @@ const Renderer = (() => {
     ctx.fill();
   }
 
-  // ── big catch burst ─────────────────────────────────────────────────────
-  function spawnCatchBurst(pos) {
-    const count = 28 + Math.floor(Math.random() * 10);
-    for (let i = 0; i < count; i++) {
-      if (particles.length >= MAX_PARTICLES) break;
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 2.5 + Math.random() * 6;
-      particles.push({
-        x: pos.x, y: pos.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 2,
-        life: 1, maxLife: 0.4 + Math.random() * 0.5,
-      });
+  // ── ripple effect on catch ───────────────────────────────────────────────
+  const ripples = [];
+
+  function spawnRipple(pos) {
+    for (let i = 0; i < 3; i++) {
+      ripples.push({ x: pos.x, y: pos.y, r: 8, maxR: 60 + i * 28, alpha: 0.72 - i * 0.12, delay: i * 5 });
+    }
+  }
+
+  function drawRipples() {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rp = ripples[i];
+      if (rp.delay > 0) { rp.delay--; continue; }
+      rp.r += (rp.maxR - rp.r) * 0.1;
+      rp.alpha *= 0.92;
+      if (rp.alpha < 0.008) { ripples.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,255,255,${rp.alpha.toFixed(3)})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
     }
   }
 
   // ── bucket geometry constants ────────────────────────────────────────────
-  const BUCKET_OPEN_W  = 200;  // opening width (top)
-  const BUCKET_CLOSE_W = 158;  // base width (bottom, narrower = trapezoid)
-  const BUCKET_H       = 120;  // height
+  const BUCKET_OPEN_W  = 260;  // opening width (top)
+  const BUCKET_CLOSE_W = 206;  // base width (bottom, narrower = trapezoid)
+  const BUCKET_H       = 80;   // height
   const BUCKET_MARGIN  = 18;   // gap from screen bottom
 
   // Returns the 4 key points of the bucket given its center X
@@ -347,7 +360,7 @@ const Renderer = (() => {
 
   // ── background: grid + faint orbital circles ─────────────────────────────
   function drawBgLayer(W, H) {
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = `rgb(${bgColor[0]},${bgColor[1]},${bgColor[2]})`;
     ctx.fillRect(0, 0, W, H);
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.025)';
@@ -532,6 +545,7 @@ const Renderer = (() => {
 
     // particles
     drawParticles(dt);
+    drawRipples();
 
     // HUD readouts + corner brackets (drawn last, always on top)
     drawHUD(W, H, now);
@@ -568,5 +582,5 @@ const Renderer = (() => {
   function isGameOver() { return gameOver; }
   function resetTimer()  { startTime = performance.now(); gameOver = false; lastHandCenters = []; }
 
-  return { init, frame, spawnCatchBurst, nextBucketStyle, isGameOver, resetTimer };
+  return { init, frame, spawnRipple, setBgMode, nextBucketStyle, isGameOver, resetTimer };
 })();

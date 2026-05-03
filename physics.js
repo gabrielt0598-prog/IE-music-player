@@ -7,7 +7,7 @@ const PhysicsEngine = (() => {
 
   // ── world ──────────────────────────────────────────────────────────────────
   const engine = Engine.create({
-    gravity: { x: 0, y: 1.2 },
+    gravity: { x: 0, y: 0.7 },
     positionIterations: 6,
     velocityIterations: 4,
   });
@@ -61,7 +61,7 @@ const PhysicsEngine = (() => {
     const ball = Bodies.circle(x, -r - 5, r, {
       restitution : 0.55,
       friction    : 0.1,
-      frictionAir : 0.005,
+      frictionAir : 0.014,
       density     : 0.002,
       label       : 'ball',
       render      : { fillStyle: randomColor() },
@@ -84,8 +84,8 @@ const PhysicsEngine = (() => {
   }
 
   // ── bucket constants (must match render.js) ────────────────────────────────
-  const BUCKET_OPEN_W = 200;
-  const BUCKET_H      = 120;
+  const BUCKET_OPEN_W = 260;
+  const BUCKET_H      = 80;
   const BUCKET_MARGIN = 18;
 
   // ── bucket catch check ─────────────────────────────────────────────────

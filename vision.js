@@ -14,6 +14,7 @@ const Vision = (() => {
   let videoEl        = null;
   let lastDetectTime = 0;
   let handLandmarks  = [];        // latest landmarks from MediaPipe
+  let pinchStates    = [];        // boolean per hand — true when thumb+index pinched
   let handHulls      = [];        // computed convex hulls in canvas coords
   let segMask        = null;      // latest segmentation mask from SelfieSegmentation
   let canvasW        = window.innerWidth;
@@ -69,6 +70,11 @@ const Vision = (() => {
 
     hands.onResults(results => {
       handLandmarks = results.multiHandLandmarks || [];
+      pinchStates = handLandmarks.map(lm => {
+        const dx = lm[4].x - lm[8].x;
+        const dy = lm[4].y - lm[8].y;
+        return Math.sqrt(dx * dx + dy * dy) < 0.07;
+      });
     });
 
     // feed frames into MediaPipe on a low-rate interval
@@ -151,5 +157,7 @@ const Vision = (() => {
 
   function getSegmentationMask() { return segMask; }
 
-  return { init, recalibrate, resize, getHandHulls, getHandCenters, getSegmentationMask };
+  function getPinchStates() { return pinchStates; }
+
+  return { init, recalibrate, resize, getHandHulls, getHandCenters, getSegmentationMask, getPinchStates };
 })();

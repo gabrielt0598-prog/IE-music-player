@@ -79,15 +79,19 @@
     392.00, 329.63, 293.66, 261.63,
   ];
   let melodyIdx = 0;
+  let soundMode = 0;
+  const SOUND_MODES = [
+    { name: 'Bell',  bg: [0, 0, 0]   },
+    { name: 'Pluck', bg: [0, 5, 18]  },
+    { name: 'Synth', bg: [8, 0, 18]  },
+    { name: 'Pad',   bg: [0, 12, 8]  },
+  ];
 
-  // Soft bell tone with simulated reverb (short delay feedback)
   function playBell(freq) {
     if (!soundEnabled) return;
     try {
       const ac  = getAudioCtx();
       const now = ac.currentTime;
-
-      // delay → feedback loop (simulates reverb tail)
       const delay  = ac.createDelay(1.0);
       const fbGain = ac.createGain();
       const wetOut = ac.createGain();
@@ -96,16 +100,12 @@
       wetOut.gain.value     = 0.42;
       delay.connect(fbGain); fbGain.connect(delay);
       delay.connect(wetOut); wetOut.connect(ac.destination);
-
-      // fundamental — long sine decay
       const o1 = ac.createOscillator(), g1 = ac.createGain();
       o1.connect(g1); g1.connect(ac.destination); g1.connect(delay);
       o1.type = 'sine'; o1.frequency.value = freq;
       g1.gain.setValueAtTime(0.16, now);
       g1.gain.exponentialRampToValueAtTime(0.001, now + 2.8);
       o1.start(now); o1.stop(now + 3.0);
-
-      // detuned octave shimmer
       const o2 = ac.createOscillator(), g2 = ac.createGain();
       o2.connect(g2); g2.connect(delay);
       o2.type = 'sine'; o2.frequency.value = freq * 2.007;
@@ -115,11 +115,61 @@
     } catch (_) {}
   }
 
+  function playPluck(freq) {
+    if (!soundEnabled) return;
+    try {
+      const ac  = getAudioCtx();
+      const now = ac.currentTime;
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'triangle'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.22, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+      o.start(now); o.stop(now + 0.7);
+    } catch (_) {}
+  }
+
+  function playSynth(freq) {
+    if (!soundEnabled) return;
+    try {
+      const ac  = getAudioCtx();
+      const now = ac.currentTime;
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.1, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      o.start(now); o.stop(now + 0.5);
+    } catch (_) {}
+  }
+
+  function playPad(freq) {
+    if (!soundEnabled) return;
+    try {
+      const ac  = getAudioCtx();
+      const now = ac.currentTime;
+      const o1 = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain();
+      o1.connect(g); o2.connect(g); g.connect(ac.destination);
+      o1.type = 'sawtooth'; o1.frequency.value = freq;
+      o2.type = 'sawtooth'; o2.frequency.value = freq * 1.005;
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(0.12, now + 0.08);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 1.4);
+      o1.start(now); o1.stop(now + 1.5);
+      o2.start(now); o2.stop(now + 1.5);
+    } catch (_) {}
+  }
+
   function playCatch() {
     startAmbient();
     const freq = MELODY[melodyIdx % MELODY.length];
     melodyIdx++;
-    playBell(freq);
+    switch (soundMode) {
+      case 0: playBell(freq);  break;
+      case 1: playPluck(freq); break;
+      case 2: playSynth(freq); break;
+      case 3: playPad(freq);   break;
+    }
     pulseAmbient();
   }
 
@@ -130,8 +180,6 @@
   }
 
   // ── keyboard shortcuts ────────────────────────────────────────────────────
-  let windActive = false;
-
   window.addEventListener('keydown', e => {
     switch (e.key.toLowerCase()) {
       case 'r':
@@ -147,25 +195,6 @@
           PhysicsEngine.burstSpawn();
         }
         break;
-      case 'w':
-        windActive = PhysicsEngine.toggleWind();
-        showToast(windActive ? '💨 Wind ON' : 'Wind OFF');
-        break;
-      case 's':
-        soundEnabled = !soundEnabled;
-        if (ambientGain) {
-          const ac  = getAudioCtx();
-          const now = ac.currentTime;
-          ambientGain.gain.cancelScheduledValues(now);
-          ambientGain.gain.linearRampToValueAtTime(soundEnabled ? 0.085 : 0, now + 0.5);
-        }
-        showToast(soundEnabled ? 'Sound ON' : 'Sound OFF');
-        break;
-      case 'b': {
-        const name = Renderer.nextBucketStyle();
-        showToast(`Bucket: ${name}`);
-        break;
-      }
     }
   });
 
@@ -250,7 +279,7 @@
     }
 
     PhysicsEngine.onCatch((ball, pos) => {
-      Renderer.spawnCatchBurst(pos);
+      Renderer.spawnRipple(pos);
       playCatch();
     });
 
@@ -263,9 +292,26 @@
 
     // ── render + physics loop ───────────────────────────────────────────────
     let lastPhysics = performance.now();
+    let prevPinch   = [];
+    let lastPinchAt = 0;
+
     function loop(now) {
       const delta = Math.min(now - lastPhysics, 50);
       lastPhysics = now;
+
+      // Pinch rising edge → cycle sound mode (600ms debounce)
+      const pinch = Vision.getPinchStates();
+      pinch.forEach((isPinching, i) => {
+        if (isPinching && !prevPinch[i] && now - lastPinchAt > 600) {
+          lastPinchAt = now;
+          soundMode = (soundMode + 1) % SOUND_MODES.length;
+          const mode = SOUND_MODES[soundMode];
+          Renderer.setBgMode(mode.bg);
+          showToast(`Sound: ${mode.name}`);
+        }
+      });
+      prevPinch = pinch.slice();
+
       PhysicsEngine.checkCatches(Vision.getHandCenters());
       PhysicsEngine.step(delta);
       Renderer.frame(now);
