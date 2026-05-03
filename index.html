@@ -1,60 +1,230 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Particle DJ — Audio Visualizer</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SEQUENCE // BALL DROP</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    #game-canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #webcam {
+      position: fixed;
+      top: -9999px;
+      left: -9999px;
+      width: 320px;
+      height: 240px;
+      transform: scaleX(-1);
+    }
+
+    /* ── Overlay ───────────────────────────────────────────────────────────── */
+    /* ── Start-screen canvases ────────────────────────────────────────────── */
+    #start-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 90;
+      pointer-events: none;
+    }
+
+    #cursor-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 110;
+      pointer-events: none;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      z-index: 100;
+      transition: opacity 0.9s ease;
+    }
+
+    #overlay.fade-out { opacity: 0; pointer-events: none; }
+
+    /* corner bracket decorations */
+    #overlay::before, #overlay::after {
+      content: '';
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-color: rgba(255,255,255,0.22);
+      border-style: solid;
+    }
+    #overlay::before { top: 24px; left: 24px;  border-width: 1.5px 0 0 1.5px; }
+    #overlay::after  { top: 24px; right: 24px; border-width: 1.5px 1.5px 0 0; }
+
+    .overlay-inner {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      max-width: 480px;
+      padding: 40px 32px;
+      background: rgba(0,0,0,0.88);
+      border: 1px solid rgba(255,255,255,0.22);
+      box-shadow: 0 0 60px rgba(0,0,0,0.9);
+    }
+    .overlay-inner::before, .overlay-inner::after {
+      content: '';
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      border-color: rgba(255,255,255,0.3);
+      border-style: solid;
+    }
+    .overlay-inner::before { bottom: -1px; left: -1px;  border-width: 0 0 1.5px 1.5px; }
+    .overlay-inner::after  { bottom: -1px; right: -1px; border-width: 0 1.5px 1.5px 0; }
+
+    .overlay-label {
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      color: rgba(255,255,255,0.3);
+      text-transform: uppercase;
+    }
+
+    #overlay h1 {
+      color: rgba(255,255,255,0.92);
+      font-size: clamp(1.5rem, 4vw, 2.4rem);
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      text-align: center;
+      font-weight: normal;
+    }
+
+    #overlay p {
+      color: rgba(255,255,255,0.42);
+      font-size: clamp(0.72rem, 1.6vw, 0.85rem);
+      text-align: center;
+      line-height: 1.9;
+      letter-spacing: 0.06em;
+    }
+
+    #start-btn {
+      margin-top: 8px;
+      padding: 11px 36px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.5);
+      color: rgba(255,255,255,0.85);
+      font-family: inherit;
+      font-size: 0.78rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    #start-btn:hover {
+      background: rgba(255,255,255,0.1);
+      border-color: rgba(255,255,255,0.9);
+      color: #fff;
+    }
+
+    #start-btn:disabled { opacity: 0.4; cursor: default; }
+
+    /* ── HUD keyboard hints ────────────────────────────────────────────────── */
+    #hud {
+      position: fixed;
+      top: 112px;
+      left: 26px;
+      color: rgba(255,255,255,0.58);
+      font-size: 0.78rem;
+      letter-spacing: 0.1em;
+      text-align: left;
+      pointer-events: none;
+      z-index: 10;
+      line-height: 2.4;
+    }
+
+    #hud kbd {
+      display: inline-block;
+      border: 1px solid rgba(255,255,255,0.55);
+      padding: 1px 6px;
+      font-family: inherit;
+      font-size: 0.75rem;
+    }
+
+    /* ── Flash / FPS ───────────────────────────────────────────────────────── */
+    #calib-flash {
+      position: fixed;
+      inset: 0;
+      background: rgba(255,255,255,0.06);
+      pointer-events: none;
+      opacity: 0;
+      z-index: 50;
+      transition: opacity 0.15s ease;
+    }
+    #calib-flash.flash { opacity: 1; }
+
+    #fps {
+      display: none;
+    }
+  </style>
 </head>
 <body>
-  <div id="app">
-    <div id="main-app">
 
-      <!-- Header -->
-      <header id="header">
-        <div id="track-info">
-          <span id="track-name">No track loaded</span>
-        </div>
+  <canvas id="game-canvas"></canvas>
+  <canvas id="start-canvas"></canvas>
+  <video id="webcam" autoplay playsinline muted></video>
 
-        <div id="app-title">◉ PARTICLE DJ</div>
-
-        <div id="playback-controls">
-          <button id="play-pause-btn" title="Play / Pause">⏯</button>
-          <button id="file-open-btn" title="Open audio file">📂</button>
-          <input id="file-input" type="file" accept="audio/*" hidden>
-        </div>
-      </header>
-
-      <!-- Visualizer Area -->
-      <div id="visualizer-container">
-        <canvas id="controls-canvas"></canvas>
-
-        <!-- Drop zone — hidden once a file is loaded -->
-        <div id="drop-zone">
-          <div id="drop-inner">
-            <div id="drop-icon">◉</div>
-            <p>Drop an audio file here</p>
-            <p class="drop-sub">MP3 · WAV · FLAC · OGG</p>
-            <button id="file-btn">Choose File</button>
-          </div>
-        </div>
-
-        <!-- Hand tracking overlays -->
-        <video id="webcam" autoplay playsinline muted></video>
-        <canvas id="hand-canvas"></canvas>
-
-        <div id="hand-cursor"></div>
-        <div id="hand-cursor-2"></div>
-
-        <div id="status-bar"></div>
-
-        <button id="hand-toggle" title="Toggle hand tracking">&#9995;</button>
-      </div>
-
+  <div id="overlay">
+    <div class="overlay-inner">
+      <span class="overlay-label">System Boot &nbsp;//&nbsp; v2.0</span>
+      <h1>Ball&nbsp;Drop</h1>
+      <p>Stand in front of the camera.<br>
+         Catch falling objects with your hands<br>
+         to advance the sequence counter.</p>
+      <button id="start-btn">Initialise Camera</button>
+      <span class="overlay-label">Feed is processed locally &mdash; no data transmitted</span>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
-  <script type="module" src="js/app.js"></script>
+  <div id="hud">
+    <span><kbd>Space</kbd>&nbsp; burst</span><br>
+    <span><kbd>B</kbd>&nbsp; bucket style</span><br>
+    <span><kbd>W</kbd>&nbsp; wind</span><br>
+    <span><kbd>S</kbd>&nbsp; sound</span>
+  </div>
+
+  <canvas id="cursor-canvas"></canvas>
+  <div id="calib-flash"></div>
+  <div id="fps">-- fps</div>
+
+  <!-- Matter.js physics -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+
+  <script src="physics.js"></script>
+  <script src="vision.js"></script>
+  <script src="render.js"></script>
+  <script src="startscreen.js"></script>
+  <script src="main.js"></script>
 </body>
 </html>
