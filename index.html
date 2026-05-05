@@ -635,8 +635,9 @@
 
       PARAMS.forEach(p => {
         const tip = lmPx(landmarks[p.idx], fit);
-        const mx = (tip.x + thumb.x) / 2;
-        const my = (tip.y + thumb.y) / 2;
+        // Place label directly above the fingertip dot, not at palm midpoint
+        const mx = tip.x;
+        const my = tip.y - DOT_R - 20;
         const hz   = Math.round(currentPitchHz);
         const text = (p.idx === 12)
           ? `Pitch ${hz > 0 ? '+' : ''}${hz} Hz`
@@ -740,11 +741,16 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawVideo(fit);
 
-      handDetected = !!(results.multiHandLandmarks?.length);
+      // Keep only hands in the left pane: x > 0.5 in raw MediaPipe coords
+      // (right half of raw frame = left half of mirrored display = left pane)
+      const paneHands = (results.multiHandLandmarks || [])
+        .filter(hand => hand[0].x > 0.5)
+        .slice(0, 1);
+      handDetected = paneHands.length > 0;
 
       let anyFist = false;
       if (handDetected) {
-        results.multiHandLandmarks.forEach(hand => {
+        paneHands.forEach(hand => {
           if (isFistClosed(hand)) anyFist = true;
           drawHand(hand, fit);
           updateRate(hand);
@@ -782,7 +788,7 @@
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
     });
     gestureHands.setOptions({
-      maxNumHands: 2, modelComplexity: 1,
+      maxNumHands: 1, modelComplexity: 1,
       minDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
     });
     gestureHands.onResults(onResults);

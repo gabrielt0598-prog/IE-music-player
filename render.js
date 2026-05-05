@@ -118,9 +118,9 @@ const Renderer = (() => {
   }
 
   // ── bucket geometry constants ────────────────────────────────────────────
-  const BUCKET_OPEN_W  = 260;  // opening width (top)
-  const BUCKET_CLOSE_W = 206;  // base width (bottom, narrower = trapezoid)
-  const BUCKET_H       = 80;   // height
+  const BUCKET_OPEN_W  = 160;  // opening width (top)
+  const BUCKET_CLOSE_W = 128;  // base width (bottom, narrower = trapezoid)
+  const BUCKET_H       = 60;   // height
   const BUCKET_MARGIN  = 18;   // gap from screen bottom
 
   // Returns the 4 key points of the bucket given its center X
