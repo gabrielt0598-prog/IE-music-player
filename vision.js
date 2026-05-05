@@ -62,7 +62,7 @@ const Vision = (() => {
     });
 
     hands.setOptions({
-      maxNumHands         : 1,
+      maxNumHands         : 2,
       modelComplexity     : 0,
       minDetectionConfidence : 0.6,
       minTrackingConfidence  : 0.5,

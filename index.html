@@ -788,7 +788,7 @@
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
     });
     gestureHands.setOptions({
-      maxNumHands: 1, modelComplexity: 1,
+      maxNumHands: 2, modelComplexity: 1,
       minDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
     });
     gestureHands.onResults(onResults);
