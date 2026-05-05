@@ -62,18 +62,14 @@ const Vision = (() => {
     });
 
     hands.setOptions({
-      maxNumHands         : 2,
+      maxNumHands         : 1,
       modelComplexity     : 0,
       minDetectionConfidence : 0.6,
       minTrackingConfidence  : 0.5,
     });
 
     hands.onResults(results => {
-      // Keep only hands in the right pane: x < 0.5 in raw MediaPipe coords
-      // (left half of raw frame = right half of mirrored display = right pane)
-      handLandmarks = (results.multiHandLandmarks || [])
-        .filter(lm => lm[0].x < 0.5)
-        .slice(0, 1);
+      handLandmarks = (results.multiHandLandmarks || []).slice(0, 1);
       pinchStates = handLandmarks.map(lm => {
         const dx = lm[4].x - lm[8].x;
         const dy = lm[4].y - lm[8].y;

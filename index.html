@@ -332,6 +332,8 @@
     })();
   </script>
 
+  <script src="dual-camera.js"></script>
+
   <!-- Matter.js (Ball Drop physics) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
   <!-- MediaPipe (shared detection pipeline) -->
@@ -741,11 +743,7 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawVideo(fit);
 
-      // Keep only hands in the left pane: x > 0.5 in raw MediaPipe coords
-      // (right half of raw frame = left half of mirrored display = left pane)
-      const paneHands = (results.multiHandLandmarks || [])
-        .filter(hand => hand[0].x > 0.5)
-        .slice(0, 1);
+      const paneHands = (results.multiHandLandmarks || []).slice(0, 1);
       handDetected = paneHands.length > 0;
 
       let anyFist = false;
@@ -788,7 +786,7 @@
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
     });
     gestureHands.setOptions({
-      maxNumHands: 2, modelComplexity: 1,
+      maxNumHands: 1, modelComplexity: 1,
       minDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
     });
     gestureHands.onResults(onResults);

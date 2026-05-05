@@ -5,7 +5,7 @@
 (async () => {
   // ── DOM refs ───────────────────────────────────────────────────────────────
   const canvasEl   = document.getElementById('game-canvas');
-  const videoEl    = document.getElementById('shared-webcam');
+  const videoEl    = document.getElementById('right-webcam');
   const overlay    = document.getElementById('overlay');
   const startBtn   = document.getElementById('start-btn');
   const calibFlash = document.getElementById('calib-flash');
@@ -234,7 +234,7 @@
   // ── webcam start — reuses the globally shared camera stream ───────────────
   async function startWebcam() {
     try {
-      await window.CAMERA_READY;
+      await window.RIGHT_CAMERA_READY;
       return videoEl.srcObject !== null;
     } catch (err) {
       console.error('[Main] Webcam error:', err);
