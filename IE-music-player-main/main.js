@@ -12,8 +12,8 @@
 
   // ── canvas sizing ──────────────────────────────────────────────────────────
   function resizeCanvas() {
-    canvasEl.width  = Math.floor(window.innerWidth / 2);
-    canvasEl.height = window.innerHeight;
+    canvasEl.width  = canvasEl.offsetWidth;
+    canvasEl.height = canvasEl.offsetHeight;
     PhysicsEngine.resize(canvasEl.width, canvasEl.height);
     Vision.resize(canvasEl.width, canvasEl.height);
   }
@@ -81,10 +81,10 @@
   let melodyIdx = 0;
   let soundMode = 0;
   const SOUND_MODES = [
-    { name: 'Bell',  bg: [0, 0, 0]   },
-    { name: 'Pluck', bg: [0, 5, 18]  },
-    { name: 'Synth', bg: [8, 0, 18]  },
-    { name: 'Pad',   bg: [0, 12, 8]  },
+    { name: 'Bell',  bg: [26, 8, 18]  },
+    { name: 'Pluck', bg: [22, 6, 24]  },
+    { name: 'Synth', bg: [30, 6, 14]  },
+    { name: 'Pad',   bg: [20, 10, 22] },
   ];
 
   function playBell(freq) {
@@ -217,7 +217,7 @@
         fontSize     : '1rem',
         fontWeight   : '600',
         letterSpacing: '0.1em',
-        zIndex       : '300',
+        zIndex       : '700',
         pointerEvents: 'none',
         transition   : 'opacity 0.35s ease',
         whiteSpace   : 'nowrap',
@@ -255,21 +255,35 @@
     // Stop start-screen animation
     StartScreen.stop();
 
-    // Camera may already be running (auto-started below); start if not
-    let camOk = videoEl.srcObject !== null;
-    if (!camOk) camOk = await startWebcam();
-
-    // init subsystems
+    // Reset and reinit subsystems
+    PhysicsEngine.reset();
+    Renderer.resetTimer();
     PhysicsEngine.init(canvasEl.width, canvasEl.height);
     Renderer.init(canvasEl, videoEl);
 
-    if (camOk && !visionInitialised) {
-      await Vision.init(videoEl);
-      visionInitialised = true;
+    // Initialize physics engine with conductor data
+    if (window.conductorData) {
+      PhysicsEngine.updateSpawnRate(window.conductorData.rateNorm, window.conductorData.shouldSpawnBalls);
     }
+
+    // Initialize Vision immediately without waiting for camera
+    if (!visionInitialised) {
+      console.log('[Main] Initializing Vision immediately');
+      Vision.init(videoEl);
+      visionInitialised = true;
+      console.log('[Main] Vision initialized - camera will connect when ready');
+    }
+
+    // Start camera in background without blocking
+    window.RIGHT_CAMERA_READY.then(async () => {
+      let camOk = videoEl.srcObject !== null;
+      if (!camOk) camOk = await startWebcam();
+      console.log('[Main] Camera ready:', camOk);
+    });
 
     PhysicsEngine.onCatch((ball, pos) => {
       Renderer.spawnRipple(pos);
+      Renderer.spawnCatchText(pos);
       playCatch();
     });
 
@@ -289,10 +303,21 @@
       const delta = Math.min(now - lastPhysics, 50);
       lastPhysics = now;
 
-      // Pinch rising edge → cycle sound mode (600ms debounce)
+      // Update ball spawn rate and size based on conductor's gestures
+      if (window.conductorData) {
+        PhysicsEngine.updateSpawnRate(window.conductorData.rateNorm, window.conductorData.shouldSpawnBalls);
+        // Ball size is updated directly in spawnBall function from conductorData.ballSize
+      }
+
+      // Pinch rising edge → cycle sound mode (600ms debounce) - catcher side only
       const pinch = Vision.getPinchStates();
+      const handCenters = Vision.getHandCenters();
+      
       pinch.forEach((isPinching, i) => {
-        if (isPinching && !prevPinch[i] && now - lastPinchAt > 600) {
+        // Only allow pinch sound change if hand is detected on catcher side (right side)
+        const isCatcherSide = handCenters.length > i && handCenters[i] !== undefined;
+        
+        if (isPinching && !prevPinch[i] && isCatcherSide && now - lastPinchAt > 600) {
           lastPinchAt = now;
           soundMode = (soundMode + 1) % SOUND_MODES.length;
           const mode = SOUND_MODES[soundMode];
@@ -324,4 +349,127 @@
   // ── wire up StartScreen + button ───────────────────────────────────────────
   StartScreen.init(launchGame);
   startBtn.addEventListener('click', () => launchGame());
+
+  // ── game over buttons ──────────────────────────────────────────────────────
+  document.getElementById('go-btn-yes').addEventListener('click', () => {
+    PhysicsEngine.reset();
+    Renderer.resetTimer();
+    // Reset launching flag to allow new game launch
+    launching = false;
+    startBtn.disabled = false;
+    startBtn.textContent = 'Start Game';
+    // Hide game over overlay and show start screen
+    document.getElementById('gameover-overlay').style.display = 'none';
+    overlay.classList.remove('fade-out');
+    overlay.style.display = 'flex';
+  });
+  document.getElementById('go-btn-no').addEventListener('click', () => {
+    document.getElementById('gameover-overlay').style.display = 'none';
+    overlay.classList.remove('fade-out');
+    overlay.style.display = 'flex';
+    startBtn.disabled    = false;
+    startBtn.textContent = 'Start Game';
+    launching = false;
+  });
+
+  // ── High Score System ──────────────────────────────────────────────────────
+  const HIGHSCORES_KEY = 'gestureBallDrop_highscores';
+  const MAX_HIGHSCORES = 10;
+
+  function getHighScores() {
+    const stored = localStorage.getItem(HIGHSCORES_KEY);
+    return stored ? JSON.parse(stored) : [];
+  }
+
+  function saveHighScores(scores) {
+    localStorage.setItem(HIGHSCORES_KEY, JSON.stringify(scores));
+  }
+
+  function addHighScore(name, score) {
+    const scores = getHighScores();
+    scores.push({ name, score, date: new Date().toISOString() });
+    scores.sort((a, b) => b.score - a.score); // Sort by score descending
+    scores.splice(MAX_HIGHSCORES); // Keep only top scores
+    saveHighScores(scores);
+    return scores;
+  }
+
+  function displayHighScores() {
+    const scores = getHighScores();
+    const listEl = document.getElementById('highscores-list');
+    
+    if (scores.length === 0) {
+      listEl.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.5); font-family: monospace;">No high scores yet</div>';
+      return;
+    }
+
+    listEl.innerHTML = scores.map((score, index) => `
+      <div class="highscore-item">
+        <span class="highscore-rank">#${index + 1}</span>
+        <span class="highscore-name">${score.name}</span>
+        <span class="highscore-score">${score.score}</span>
+      </div>
+    `).join('');
+  }
+
+  // Save score button handler
+  document.getElementById('save-score-btn').addEventListener('click', () => {
+    const nameInput = document.getElementById('player-name-input');
+    const name = nameInput.value.trim();
+    const score = PhysicsEngine.score;
+
+    if (name === '') {
+      nameInput.style.borderColor = 'rgba(255,100,100,0.8)';
+      setTimeout(() => {
+        nameInput.style.borderColor = 'rgba(255,255,255,0.2)';
+      }, 1000);
+      return;
+    }
+
+    addHighScore(name, score);
+    displayHighScores();
+    nameInput.value = '';
+    
+    // Disable input after saving
+    nameInput.disabled = true;
+    document.getElementById('save-score-btn').disabled = true;
+    document.getElementById('save-score-btn').textContent = 'Score Saved!';
+  });
+
+  // Enter key to save score
+  document.getElementById('player-name-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      document.getElementById('save-score-btn').click();
+    }
+  });
+
+  // Update game over display to show high scores
+  function showGameOver() {
+    displayHighScores();
+    // Reset input fields for new game
+    const nameInput = document.getElementById('player-name-input');
+    nameInput.value = '';
+    nameInput.disabled = false;
+    
+    // Force focus after a short delay to ensure DOM is ready
+    setTimeout(() => {
+      nameInput.focus();
+    }, 100);
+    
+    const saveBtn = document.getElementById('save-score-btn');
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save Score';
+  }
+
+  // Hook into the existing game over display
+  const originalGameOverDisplay = Renderer.isGameOver;
+  const checkGameOver = () => {
+    if (originalGameOverDisplay() && document.getElementById('gameover-overlay').style.display === 'flex') {
+      showGameOver();
+    }
+  };
+
+  // Check for game over state periodically
+  setInterval(checkGameOver, 100);
+
 })();

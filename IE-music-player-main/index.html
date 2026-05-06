@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GESTURE INSTRUMENT // BALL DROP</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      padding: 12px;
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    #split-container {
+      display: flex;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Two webcams — hidden, one per pane */
+    #left-webcam,
+    #right-webcam {
+      position: fixed;
+      top: -9999px;
+      left: -9999px;
+      width: 320px;
+      height: 240px;
+    }
+
+    /* ── Divider ─────────────────────────────────────────────────────── */
+    #divider {
+      position: relative;
+      width: 12px;
+      height: 100%;
+      background: rgba(255,255,255,0.18);
+      flex-shrink: 0;
+      z-index: 500;
+    }
+    #divider::before, #divider::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 2.5px;
+      background: linear-gradient(to right, rgba(50,110,255,0.82) 50%, rgba(255,45,120,0.82) 50%);
+    }
+    #divider::before { top: 0; }
+    #divider::after  { bottom: 0; }
+
+    /* ══════════════ LEFT PANE — Gesture Instrument ══════════════ */
+    #left-pane {
+      position: relative;
+      flex: 1;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #gesture-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── Camera picker ───────────────────────────────────────────────────── */
+    .cam-picker {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      z-index: 200;
+    }
+    .cam-label {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      color: rgba(255,255,255,0.38);
+      text-transform: uppercase;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .cam-select {
+      background: rgba(0,0,0,0.85);
+      border: 1.5px solid rgba(255,255,255,0.35);
+      color: rgba(255,255,255,0.75);
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      padding: 4px 8px;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      outline: none;
+      max-width: 170px;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    .cam-select:hover { border-color: rgba(255,255,255,0.75); color: #fff; }
+    #left-cam-picker  { left: 18px; top: 100px; }
+    #right-cam-picker { right: 18px; top: 18px; }
+
+    .ctrl-btn {
+      position: absolute;
+      left: 18px;
+      background: rgba(0,0,0,0.85);
+      border: 2.5px solid #fff;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      font-weight: bold;
+      letter-spacing: 1.5px;
+      padding: 9px 16px;
+      cursor: pointer;
+      z-index: 10;
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .ctrl-btn:hover { background: rgba(40,40,40,0.95); }
+    #mute-btn { top: 18px; }
+    #load-btn { top: 58px; }
+    #file-input { display: none; }
+
+    #gesture-status {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255,255,255,0.6);
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      pointer-events: none;
+      white-space: nowrap;
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    #pane-label-left {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      text-align: center;
+      font-size: 9px;
+      letter-spacing: 0.25em;
+      color: rgba(255,255,255,0.2);
+      text-transform: uppercase;
+      padding: 5px 0;
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    /* ══════════════ RIGHT PANE — Ball Drop ══════════════ */
+    #right-pane {
+      position: relative;
+      flex: 1;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #game-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #start-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 90;
+      pointer-events: none;
+    }
+
+    #cursor-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 110;
+      pointer-events: none;
+    }
+
+    /* ── Full-screen splash overlay ─────────────────────────────────── */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 910;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(ellipse at 32% 28%, #22222e 0%, #0b0b12 68%);
+      transition: opacity 0.8s ease;
+    }
+    #overlay.fade-out { opacity: 0; pointer-events: none; }
+
+    #splash-card {
+      background: rgba(14,14,22,0.96);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 22px;
+      padding: 52px 72px 40px;
+      max-width: 880px;
+      width: 92%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      box-shadow: 0 20px 80px rgba(0,0,0,0.65);
+    }
+
+    #splash-title {
+      font-family: system-ui, 'Arial Black', Arial, sans-serif;
+      font-size: clamp(60px, 9.5vw, 112px);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      line-height: 0.93;
+      margin-bottom: 30px;
+      background: linear-gradient(180deg, #ffffff 45%, rgba(175,182,215,0.6) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    #splash-desc {
+      font-family: system-ui, sans-serif;
+      font-size: clamp(14px, 1.55vw, 19px);
+      color: rgba(185,190,210,0.78);
+      line-height: 1.65;
+      max-width: 640px;
+      margin-bottom: 26px;
+      font-weight: 400;
+    }
+
+    #splash-tagline {
+      font-family: system-ui, sans-serif;
+      font-size: 15px;
+      color: rgba(255,255,255,0.42);
+      letter-spacing: 0.05em;
+      margin-bottom: 18px;
+    }
+
+    #start-btn {
+      width: 100%;
+      max-width: 480px;
+      padding: 20px 0;
+      background: #1b3bc4;
+      border: 2.5px solid #3b5fff;
+      border-radius: 14px;
+      color: #ffffff;
+      font-family: 'Courier New', monospace;
+      font-size: clamp(16px, 1.8vw, 22px);
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      cursor: pointer;
+      box-shadow: 0 4px 32px rgba(60,110,255,0.38);
+      transition: background 0.18s, box-shadow 0.18s;
+      margin-bottom: 30px;
+    }
+    #start-btn:hover {
+      background: #2448d8;
+      box-shadow: 0 6px 44px rgba(60,110,255,0.55);
+    }
+    #start-btn:disabled { opacity: 0.4; cursor: default; }
+
+    /* ── Splash control strip ───────────────────────────────────────── */
+    #splash-controls {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 22px;
+      margin-bottom: 22px;
+    }
+    .splash-ctrl-btn {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 8px 22px;
+      background: transparent;
+      border: 1.5px solid rgba(255,255,255,0.32);
+      color: rgba(255,255,255,0.72);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .splash-ctrl-btn:hover { border-color: rgba(255,255,255,0.85); color: #fff; }
+    .splash-cam-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .splash-cam-lbl {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      color: rgba(255,255,255,0.35);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .splash-cam-sel {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: rgba(255,255,255,0.68);
+      padding: 5px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      max-width: 160px;
+    }
+
+    #splash-credits {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.22);
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding-top: 16px;
+      width: 100%;
+    }
+
+    #hud {
+      position: absolute;
+      top: 112px;
+      left: 26px;
+      color: rgba(255,255,255,0.58);
+      font-size: 0.78rem;
+      letter-spacing: 0.1em;
+      text-align: left;
+      pointer-events: none;
+      z-index: 10;
+      line-height: 2.4;
+      display: none;
+    }
+
+    #catcher-instruction {
+      position: absolute;
+      top: 60px;
+      right: 18px;
+      color: rgba(255,255,255,0.95);
+      font-size: 0.9rem;
+      letter-spacing: 0.05em;
+      text-align: right;
+      pointer-events: none;
+      z-index: 10;
+      font-family: 'Courier New', Courier, monospace;
+      text-transform: lowercase;
+      text-shadow: 0 0 8px rgba(0,0,0,0.8);
+      font-weight: 600;
+    }
+
+    #calib-flash {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.06);
+      pointer-events: none;
+      opacity: 0;
+      z-index: 50;
+      transition: opacity 0.15s ease;
+    }
+    #calib-flash.flash { opacity: 1; }
+
+    #fps { display: none; }
+
+    #pane-label-right {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      text-align: center;
+      font-size: 9px;
+      letter-spacing: 0.25em;
+      color: rgba(255,255,255,0.2);
+      text-transform: uppercase;
+      padding: 5px 0;
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    /* ── Center HUD panel ──────────────────────────────────────────── */
+    #center-hud-wrap {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 600;
+      pointer-events: none;
+      padding: 2.5px;
+      border-radius: 8px;
+      background: linear-gradient(170deg, #2a2a2a 0%, #777 55%, #c0c0c0 100%);
+    }
+    #center-hud {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: rgba(8,6,16,0.98);
+      padding: 10px 52px 24px;
+      min-width: 210px;
+      border-radius: 6px;
+      pointer-events: none;
+    }
+    #hud-score {
+      font-size: 56px;
+      font-weight: bold;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 0.04em;
+      line-height: 1.05;
+    }
+    #hud-timer {
+      font-size: 20px;
+      color: #ff2d78;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      letter-spacing: 0.18em;
+      margin-top: 0px;
+      transition: opacity 0.1s;
+    }
+
+    /* ── Pane glowing borders (::after sits above canvas, below center HUD) */
+    #left-pane, #right-pane { border-radius: 10px 10px 0 0; }
+    #left-pane::after, #right-pane::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 100;
+    }
+    #left-pane::after {
+      border-top: 2.5px solid rgba(50,110,255,0.82);
+      border-left: 2.5px solid rgba(50,110,255,0.82);
+      border-bottom: 2.5px solid rgba(50,110,255,0.82);
+      border-right: none;
+      border-radius: 10px 0 0 0;
+    }
+    #right-pane::after {
+      border-top: 2.5px solid rgba(255,45,120,0.82);
+      border-right: 2.5px solid rgba(255,45,120,0.82);
+      border-bottom: 2.5px solid rgba(255,45,120,0.82);
+      border-left: none;
+      border-radius: 0 10px 0 0;
+    }
+
+    /* ── Divider: blue left / pink right ──────────────────────────── */
+    #divider { background: linear-gradient(to right, rgba(50,110,255,0.8) 50%, rgba(255,45,120,0.8) 50%); }
+
+    /* ── Game Over Overlay ──────────────────────────────────────────── */
+    #gameover-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 800;
+      align-items: center;
+      justify-content: center;
+    }
+    #gameover-panel {
+      background: rgba(10,8,22,0.97);
+      border: 2px solid rgba(255,255,255,0.12);
+      border-radius: 18px;
+      padding: 52px 64px 48px;
+      min-width: 520px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      box-shadow: 0 8px 64px rgba(0,0,0,0.7);
+    }
+    #gameover-title {
+      font-family: 'Courier New', monospace;
+      font-size: 52px;
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+      line-height: 1;
+    }
+    #gameover-score-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      width: 100%;
+      border-top: 1.5px solid rgba(255,255,255,0.14);
+      border-bottom: 1.5px solid rgba(255,255,255,0.14);
+      padding: 18px 0;
+      margin-bottom: 32px;
+    }
+    #gameover-score-label {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.55);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+    #gameover-score {
+      font-family: 'Courier New', monospace;
+      font-size: 52px;
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: 0.04em;
+    }
+    #gameover-play-again {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      color: rgba(255,255,255,0.6);
+      letter-spacing: 0.15em;
+      margin-bottom: 24px;
+    }
+    #gameover-buttons {
+      display: flex;
+      gap: 20px;
+    }
+    .go-btn {
+      font-family: 'Courier New', monospace;
+      font-size: 18px;
+      font-weight: bold;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      padding: 14px 48px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .go-btn:hover { opacity: 0.8; }
+    #go-btn-no {
+      background: transparent;
+      border: 2px solid rgba(255,45,120,0.85);
+      color: rgba(255,45,120,0.95);
+    }
+    #go-btn-yes {
+      background: rgba(50,110,255,0.18);
+      border: 2px solid rgba(50,110,255,0.85);
+      color: rgba(100,160,255,0.95);
+    }
+    
+    /* High Score Styles */
+    #highscore-input {
+      margin: 24px 0;
+      text-align: center;
+    }
+    #highscore-prompt {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      color: rgba(255,255,255,0.8);
+      margin-bottom: 12px;
+      letter-spacing: 0.05em;
+    }
+    #name-input-wrapper {
+      position: relative;
+      z-index: 1002;
+    }
+    #player-name-input {
+      background: rgba(255,255,255,0.08);
+      border: 2px solid rgba(255,255,255,0.2);
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      color: #fff;
+      width: 200px;
+      margin-bottom: 12px;
+      text-align: center;
+      outline: none;
+      cursor: text;
+    }
+    #player-name-input:focus {
+      border-color: rgba(100,160,255,0.8);
+      background: rgba(255,255,255,0.12);
+    }
+    #player-name-input::placeholder {
+      color: rgba(255,255,255,0.4);
+    }
+    #player-name::placeholder {
+      color: rgba(255,255,255,0.4);
+    }
+    #save-score-btn {
+      background: rgba(50,200,100,0.18);
+      border: 2px solid rgba(50,200,100,0.85);
+      color: rgba(100,255,150,0.95);
+      padding: 10px 24px;
+      font-size: 14px;
+    }
+    
+    #highscores-section {
+      margin: 24px 0;
+      width: 100%;
+    }
+    #highscores-title {
+      font-family: 'Courier New', monospace;
+      font-size: 20px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.9);
+      text-align: center;
+      margin-bottom: 16px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    #highscores-list {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 16px;
+      min-height: 120px;
+    }
+    .highscore-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      margin: 4px 0;
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+    }
+    .highscore-rank {
+      color: rgba(255,255,255,0.6);
+      margin-right: 12px;
+      font-weight: bold;
+      min-width: 20px;
+    }
+    .highscore-name {
+      color: rgba(255,255,255,0.9);
+      flex: 1;
+      text-align: left;
+    }
+    .highscore-score {
+      color: rgba(100,200,255,0.9);
+      font-weight: bold;
+      margin-left: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Center HUD panel ── -->
+  <div id="center-hud-wrap">
+    <div id="center-hud">
+      <div id="hud-score">0</div>
+      <div id="hud-timer">01:30</div>
+    </div>
+  </div>
+
+  <!-- Two webcams: left pane uses camera 0, right pane uses camera 1 -->
+  <video id="left-webcam"  autoplay playsinline muted></video>
+  <video id="right-webcam" autoplay playsinline muted></video>
+
+  <div id="split-container">
+
+    <!-- ══ LEFT PANE: Gesture Instrument ══ -->
+    <div id="left-pane">
+      <span id="pane-label-left">Gesture Instrument</span>
+      <canvas id="gesture-canvas"></canvas>
+      <button id="mute-btn" class="ctrl-btn">MUTE</button>
+      <button id="load-btn" class="ctrl-btn">LOAD FILE</button>
+      <input  id="file-input" type="file" accept=".wav,.mp3,.ogg,.aiff">
+      <div class="cam-picker" id="left-cam-picker">
+        <span class="cam-label">CAM</span>
+        <select class="cam-select" id="left-cam-select"><option>Detecting...</option></select>
+      </div>
+      <div id="gesture-status">Loading model...</div>
+    </div>
+
+    <div id="divider"></div>
+
+    <!-- ══ RIGHT PANE: Ball Drop ══ -->
+    <div id="right-pane">
+      <span id="pane-label-right">Ball Drop</span>
+      <div class="cam-picker" id="right-cam-picker">
+        <span class="cam-label">CAM</span>
+        <select class="cam-select" id="right-cam-select"><option>Detecting...</option></select>
+      </div>
+      <canvas id="game-canvas"></canvas>
+      <canvas id="start-canvas"></canvas>
+
+      <div id="catcher-instruction">pinch to change sound</div>
+
+      <div id="hud">
+        <span>Pinch thumb + index to change sound &amp; color</span>
+      </div>
+
+      <canvas id="cursor-canvas"></canvas>
+      <div id="calib-flash"></div>
+      <div id="fps">-- fps</div>
+    </div>
+
+  </div>
+
+  <!-- ── Full-screen Splash / Start Screen ── -->
+  <div id="overlay">
+    <div id="splash-card">
+      <h1 id="splash-title">Ball Drop</h1>
+      <p id="splash-desc">Stand in front of the camera. Catch falling objects with your hands to score as high as you can while the other person controls how the ball descends.</p>
+      <p id="splash-tagline">Needs two players to play</p>
+      <button id="start-btn">Start Game</button>
+      <div id="splash-controls">
+        <button class="splash-ctrl-btn" id="splash-mute-btn">Mute</button>
+        <button class="splash-ctrl-btn" id="splash-load-btn">Load File</button>
+        <div class="splash-cam-row">
+          <span class="splash-cam-lbl">Instrument Cam</span>
+          <select class="splash-cam-sel" id="splash-left-cam-select"><option>Detecting…</option></select>
+        </div>
+        <div class="splash-cam-row">
+          <span class="splash-cam-lbl">Ball Drop Cam</span>
+          <select class="splash-cam-sel" id="splash-right-cam-select"><option>Detecting…</option></select>
+        </div>
+      </div>
+      <p id="splash-credits">Made by Gabriel, Johanna, Johnathan, Mai &nbsp;&rarr;&nbsp; Interactive Environment</p>
+    </div>
+  </div>
+
+  <!-- ── Game Over Overlay ── -->
+  <div id="gameover-overlay">
+    <div id="gameover-panel">
+      <div id="gameover-title">Game Over</div>
+      <div id="gameover-score-row">
+        <span id="gameover-score-label">Total Score</span>
+        <span id="gameover-score">0</span>
+      </div>
+      
+      <!-- Name Input Section -->
+      <div id="highscore-input">
+        <div id="highscore-prompt">Enter your name for high score:</div>
+        <div id="name-input-wrapper">
+          <input type="text" id="player-name-input" placeholder="Your name" maxlength="20" autocomplete="off">
+        </div>
+        <button class="go-btn" id="save-score-btn">Save Score</button>
+      </div>
+      
+      <!-- High Scores Section -->
+      <div id="highscores-section">
+        <div id="highscores-title">High Scores</div>
+        <div id="highscores-list">
+          <!-- High scores will be populated here -->
+        </div>
+      </div>
+      
+      <div id="gameover-play-again">Play again?</div>
+      <div id="gameover-buttons">
+        <button class="go-btn" id="go-btn-no">No</button>
+        <button class="go-btn" id="go-btn-yes">Yes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Dual-camera startup with per-pane camera selector ── -->
+  <script>
+    (async () => {
+      async function openCamera(videoEl, deviceId) {
+        if (videoEl.srcObject) {
+          videoEl.srcObject.getTracks().forEach(t => t.stop());
+          videoEl.srcObject = null;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        videoEl.srcObject = stream;
+        await new Promise(r => { videoEl.onloadedmetadata = r; });
+        await videoEl.play();
+      }
+
+      function buildOptions(cams) {
+        return cams.map((cam, i) => {
+          const opt = document.createElement('option');
+          opt.value = cam.deviceId;
+          opt.textContent = cam.label || `Camera ${i + 1}`;
+          return opt;
+        });
+      }
+
+      // Allow other modules to switch cameras on the fly
+      window.switchCamera = async (side, deviceId) => {
+        const el = document.getElementById(side === 'left' ? 'left-webcam' : 'right-webcam');
+        try { await openCamera(el, deviceId); } catch (e) { console.warn('[Camera] Switch failed:', e.message); }
+      };
+
+      let leftResolve, rightResolve;
+      window.LEFT_CAMERA_READY  = new Promise(r => { leftResolve  = r; });
+      window.RIGHT_CAMERA_READY = new Promise(r => { rightResolve = r; });
+
+      try {
+        // Trigger permission prompt so enumerateDevices returns real labels + deviceIds
+        const probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        probe.getTracks().forEach(t => t.stop());
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams    = devices.filter(d => d.kind === 'videoinput');
+        if (cams.length === 0) throw new Error('No cameras found');
+
+        // Populate all four selectors (pane + splash)
+        const leftSel        = document.getElementById('left-cam-select');
+        const rightSel       = document.getElementById('right-cam-select');
+        const splashLeftSel  = document.getElementById('splash-left-cam-select');
+        const splashRightSel = document.getElementById('splash-right-cam-select');
+        [leftSel, rightSel, splashLeftSel, splashRightSel].forEach(s => { if (s) s.innerHTML = ''; });
+        buildOptions(cams).forEach(o => {
+          if (leftSel)        leftSel.appendChild(o.cloneNode(true));
+          if (rightSel)       rightSel.appendChild(o.cloneNode(true));
+          if (splashLeftSel)  splashLeftSel.appendChild(o.cloneNode(true));
+          if (splashRightSel) splashRightSel.appendChild(o.cloneNode(true));
+        });
+
+        // Default: camera 0 → left, camera 1 → right (falls back to 0 if only one)
+        const defaultLeft  = cams[0].deviceId;
+        const defaultRight = (cams[1] ?? cams[0]).deviceId;
+        [leftSel, splashLeftSel].forEach(s  => { if (s) s.value = defaultLeft; });
+        [rightSel, splashRightSel].forEach(s => { if (s) s.value = defaultRight; });
+
+        function syncSelects(side, value) {
+          const pane   = document.getElementById(side === 'left' ? 'left-cam-select'        : 'right-cam-select');
+          const splash = document.getElementById(side === 'left' ? 'splash-left-cam-select' : 'splash-right-cam-select');
+          if (pane)   pane.value   = value;
+          if (splash) splash.value = value;
+          window.switchCamera(side, value);
+        }
+        [leftSel, splashLeftSel].forEach(s  => { if (s) s.addEventListener('change', () => syncSelects('left',  s.value)); });
+        [rightSel, splashRightSel].forEach(s => { if (s) s.addEventListener('change', () => syncSelects('right', s.value)); });
+
+        const leftVideo  = document.getElementById('left-webcam');
+        const rightVideo = document.getElementById('right-webcam');
+
+        await openCamera(leftVideo, cams[0].deviceId);
+        leftResolve(true);
+
+        if (cams.length >= 2) {
+          await openCamera(rightVideo, cams[1].deviceId);
+          console.log('[Camera] Two cameras connected —',
+            cams[0].label || 'Camera 0', '/', cams[1].label || 'Camera 1');
+        } else {
+          rightVideo.srcObject = leftVideo.srcObject;
+          await new Promise(r => { rightVideo.onloadedmetadata = r; });
+          await rightVideo.play();
+          console.warn('[Camera] Only one camera — both panes share the same feed');
+        }
+        rightResolve(true);
+      } catch (e) {
+        console.warn('[Camera] Startup failed:', e.message);
+        if (leftResolve)  leftResolve(false);
+        if (rightResolve) rightResolve(false);
+      }
+    })();
+  </script>
+
+  <!-- ── Splash control wiring (runs after camera IIFE) ── -->
+  <script>
+    document.getElementById('splash-mute-btn').addEventListener('click', () => {
+      if (window.toggleMute) window.toggleMute();
+    });
+    document.getElementById('splash-load-btn').addEventListener('click', () => {
+      document.getElementById('file-input').click();
+    });
+  </script>
+
+  <!-- Matter.js (Ball Drop physics) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <!-- MediaPipe (shared detection pipeline) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+  <!-- Tone.js (Gesture Instrument audio) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js" crossorigin="anonymous"></script>
+
+  <!-- Ball Drop modules -->
+  <script src="physics.js"></script>
+  <script src="vision.js"></script>
+  <script src="render.js"></script>
+  <script src="startscreen.js"></script>
+  <script src="main.js"></script>
+
+  <!-- ══ Gesture Instrument — left pane, self-contained IIFE ══ -->
+  <script>
+  (() => {
+    const canvas    = document.getElementById('gesture-canvas');
+    const ctx       = canvas.getContext('2d');
+    const video     = document.getElementById('left-webcam');
+    const muteBtn   = document.getElementById('mute-btn');
+    const loadBtn   = document.getElementById('load-btn');
+    const fileInput = document.getElementById('file-input');
+    const statusEl  = document.getElementById('gesture-status');
+
+    // Thumb tip = 4; finger tips: index=8, middle=12, ring=16, pinky=20
+    const HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [0,9],[9,10],[10,11],[11,12],
+      [0,13],[13,14],[14,15],[15,16],
+      [0,17],[17,18],[18,19],[19,20],
+      [5,9],[9,13],[13,17],
+    ];
+    const PARAMS = [
+      { label: 'Frequency', idx: 8,  color: '#FF3355' },
+      { label: 'Size',      idx: 12, color: '#00DD88' },
+    ];
+    const THUMB_IDX = 4;
+    const DOT_R = 8;
+
+    let muted     = false;
+    let fistMuted = false;
+
+    function setGain() {
+      if (!toneGain) return;
+      const target = (muted || fistMuted) ? 0 : 1;
+      toneGain.gain.cancelScheduledValues(Tone.now());
+      toneGain.gain.linearRampTo(target, 0.005);
+    }
+
+    function resize() {
+      canvas.width  = canvas.offsetWidth  || Math.floor(window.innerWidth / 2);
+      canvas.height = canvas.offsetHeight || window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    window.toggleMute = () => {
+      muted = !muted;
+      setGain();
+      const label = muted ? 'UNMUTE' : 'MUTE';
+      muteBtn.textContent = label;
+      const splashBtn = document.getElementById('splash-mute-btn');
+      if (splashBtn) splashBtn.textContent = muted ? 'Unmute' : 'Mute';
+    };
+    muteBtn.addEventListener('click', window.toggleMute);
+
+    loadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      await ensureTone();
+      const url = URL.createObjectURL(file);
+      await buildGrainPlayer(url);
+    });
+
+    // First click on left pane wakes AudioContext and attempts auto-load
+    document.getElementById('left-pane').addEventListener('click', async () => {
+      if (typeof Tone !== 'undefined' && Tone.context.state !== 'running') {
+        await Tone.start();
+      }
+      if (!audioReady) await initAudio();
+    });
+
+    // ── Audio graph ────────────────────────────────────────────────────────
+    // GrainPlayer → freqShifter → pitchLPF → pitchHPF → chebyshev →
+    // reverb → waveAnalyser → fftAnalyser → toneGain → Destination
+
+    let grainPlayer  = null;
+    let freqShifter  = null;
+    let pitchLPF     = null;
+    let pitchHPF     = null;
+    let chebyshev    = null;
+    let reverb       = null;
+    let waveAnalyser = null;
+    let fftAnalyser  = null;
+    let toneGain     = null;
+    let audioReady   = false;
+
+    async function ensureTone() {
+      if (Tone.context.state !== 'running') await Tone.start();
+      if (!waveAnalyser) {
+        waveAnalyser = new Tone.Analyser({ type: 'waveform', size: 2048, smoothing: 0 });
+        fftAnalyser  = new Tone.Analyser({ type: 'fft',      size: 1024, smoothing: 0 });
+        toneGain     = new Tone.Gain((muted || fistMuted) ? 0 : 0.5).toDestination();
+        freqShifter  = new Tone.FrequencyShifter(0);
+        pitchLPF     = new Tone.Filter({ frequency: 20000, type: 'lowpass',  rolloff: -12 });
+        pitchHPF     = new Tone.Filter({ frequency: 10,    type: 'highpass', rolloff: -12 });
+        chebyshev    = new Tone.Chebyshev({ order: 7, wet: 0 });
+        reverb       = new Tone.Reverb({ decay: 2, wet: 0 });
+        await reverb.ready;
+        freqShifter.connect(pitchLPF);
+        pitchLPF.connect(pitchHPF);
+        pitchHPF.connect(chebyshev);
+        chebyshev.connect(reverb);
+        reverb.connect(waveAnalyser);
+        waveAnalyser.connect(fftAnalyser);
+        fftAnalyser.connect(toneGain);
+      }
+    }
+
+    async function initAudio() {
+      await ensureTone();
+      if (!grainPlayer) {
+        try {
+          console.log('Loading test.wav...');
+          await buildGrainPlayer('assets/test.wav');
+          console.log('test.wav loaded successfully');
+        } catch (e) {
+          console.warn('auto-load failed — use LOAD FILE', e);
+          // Try alternative path
+          try {
+            console.log('Trying alternative path...');
+            await buildGrainPlayer('./assets/test.wav');
+            console.log('test.wav loaded successfully (alternative path)');
+          } catch (e2) {
+            console.warn('Alternative path also failed', e2);
+          }
+        }
+      }
+    }
+
+    function buildGrainPlayer(source) {
+      return new Promise((resolve, reject) => {
+        if (grainPlayer) {
+          try { grainPlayer.stop(); grainPlayer.disconnect(); grainPlayer.dispose(); } catch (_) {}
+          grainPlayer = null;
+          audioReady  = false;
+        }
+        grainPlayer = new Tone.GrainPlayer({
+          url:       source,
+          loop:      false,
+          grainSize: 0.1,
+          overlap:   0.05,
+          onload: () => {
+            grainPlayer.connect(freqShifter);
+            audioReady = true;
+            resolve();
+          },
+          onerror: e => reject(e),
+        });
+      });
+    }
+
+    function triggerSound() {
+      if (!grainPlayer || !audioReady) return;
+      grainPlayer.stop();
+      grainPlayer.start();
+    }
+
+    // ── Hand scale: wrist(0) → middle MCP(9), palm-height normaliser ──────
+    function handScale(landmarks) {
+      const w = landmarks[0], m = landmarks[9];
+      return Math.hypot(w.x - m.x, w.y - m.y) || 0.001;
+    }
+
+    // ── Rate (index finger) → 10–750 ms, exponential curve ───────────────
+    const RATE_REL_MIN = 0.20;
+    const RATE_REL_MAX = 2.20;
+    const RATE_MS_MIN  = 10;
+    const RATE_MS_MAX  = 750;
+    const RATE_SILENCE_THRESHOLD = 0.93;
+
+    let currentRateMs   = 500;
+    let currentRateNorm = 0;
+    let nextTriggerAt   = 0;
+    let handDetected    = false;
+
+    // Global conductor data for communication between gesture instrument and ball game
+    window.conductorData = {
+      rateNorm: 0.5,
+      shouldSpawnBalls: true,
+      ballSize: 1.0
+    };
+
+    function updateRate(landmarks) {
+      const scale = handScale(landmarks);
+      const t = landmarks[THUMB_IDX], i = landmarks[8];
+      const d = Math.hypot(t.x - i.x, t.y - i.y) / scale;
+      currentRateNorm = Math.max(0, Math.min(1, (d - RATE_REL_MIN) / (RATE_REL_MAX - RATE_REL_MIN)));
+      const r = RATE_MS_MIN * Math.pow(RATE_MS_MAX / RATE_MS_MIN, currentRateNorm);
+      if (r < currentRateMs) nextTriggerAt = Math.min(nextTriggerAt, performance.now() + r);
+      currentRateMs = r;
+
+      // Update global conductor data for ball game
+      window.conductorData.rateNorm = currentRateNorm;
+      window.conductorData.shouldSpawnBalls = currentRateNorm < RATE_SILENCE_THRESHOLD;
+    }
+
+    // ── Pitch (middle finger) → −3000 to +3000 Hz ────────────────────────
+    const PITCH_REL_MIN = 0.20;
+    const PITCH_REL_MAX = 2.30;
+
+    let currentPitchHz = 0;
+
+    function updatePitch(landmarks) {
+      if (!freqShifter || !audioReady) return;
+      const scale = handScale(landmarks);
+      const t = landmarks[THUMB_IDX], m = landmarks[12];
+      const d = Math.hypot(t.x - m.x, t.y - m.y) / scale;
+      const norm = Math.max(0, Math.min(1, (d - PITCH_REL_MIN) / (PITCH_REL_MAX - PITCH_REL_MIN)));
+      currentPitchHz = norm * 6000 - 3000;
+      freqShifter.frequency.value = currentPitchHz;
+      const tLow  = Math.min(1, Math.max(0, (currentPitchHz + 3000) / 3500));
+      pitchLPF.frequency.value = 200 + (20000 - 200) * tLow;
+      const tHigh = Math.min(1, Math.max(0, (currentPitchHz - 1000) / 2000));
+      pitchHPF.frequency.value = 10 + (8000 - 10) * tHigh;
+
+      // Update ball size: close fingers (low pitch) = large balls (2x), far fingers (high pitch) = small balls (0.1x)
+      const ballSize = 2.0 - (norm * 1.9); // Maps 0->2.0, 1->0.1
+      if (window.conductorData) {
+        window.conductorData.ballSize = ballSize;
+      }
+    }
+
+    // ── Sharpness (ring finger) → Chebyshev wet 0–0.75 ──────────────────
+    const CHEBY_REL_MIN = 0.15;
+    const CHEBY_REL_MAX = 2.20;
+    const CHEBY_WET_MAX = 0.75;
+
+    let currentChebWet = 0;
+
+    function updateChebyshev(landmarks) {
+      if (!chebyshev) return;
+      const scale = handScale(landmarks);
+      const t = landmarks[THUMB_IDX], r = landmarks[16];
+      const d = Math.hypot(t.x - r.x, t.y - r.y) / scale;
+      currentChebWet = Math.max(0, Math.min(1, (d - CHEBY_REL_MIN) / (CHEBY_REL_MAX - CHEBY_REL_MIN))) * CHEBY_WET_MAX;
+      chebyshev.wet.value = currentChebWet;
+    }
+
+    // ── Space (pinky) → Reverb wet 0–0.50, power³ curve ─────────────────
+    const REVERB_REL_MIN = 0.15;
+    const REVERB_REL_MAX = 2.20;
+    const REVERB_WET_MAX = 0.50;
+
+    let currentReverbWet = 0;
+
+    function updateReverb(landmarks) {
+      if (!reverb) return;
+      const scale = handScale(landmarks);
+      const t = landmarks[THUMB_IDX], p = landmarks[20];
+      const d = Math.hypot(t.x - p.x, t.y - p.y) / scale;
+      const norm = Math.max(0, Math.min(1, (d - REVERB_REL_MIN) / (REVERB_REL_MAX - REVERB_REL_MIN)));
+      currentReverbWet = REVERB_WET_MAX * (norm * norm * norm);
+      reverb.wet.value = currentReverbWet;
+    }
+
+    // ── Cover-fit: scale video to fill the left-pane canvas ──────────────
+    function coverFit() {
+      const cw = canvas.width, ch = canvas.height;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return null;
+      const scale = Math.max(cw / vw, ch / vh);
+      const fw = vw * scale, fh = vh * scale;
+      return { ox: (cw - fw) / 2, oy: (ch - fh) / 2, fw, fh, cw, ch };
+    }
+
+    function lmPx(lm, fit) {
+      return {
+        x: fit.cw - fit.ox - lm.x * fit.fw,
+        y: fit.oy + lm.y * fit.fh,
+      };
+    }
+
+    // ── Drawing ───────────────────────────────────────────────────────────
+    function drawVideo(fit) {
+      ctx.save();
+      ctx.translate(fit.cw, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, fit.ox, fit.oy, fit.fw, fit.fh);
+      ctx.restore();
+    }
+
+    function drawHand(landmarks, fit) {
+      const thumb = lmPx(landmarks[THUMB_IDX], fit);
+
+      // Full skeleton in white/gray underneath
+      ctx.strokeStyle = 'rgba(200,200,200,0.55)';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      for (const [a, b] of HAND_CONNECTIONS) {
+        const pa = lmPx(landmarks[a], fit);
+        const pb = lmPx(landmarks[b], fit);
+        ctx.moveTo(pa.x, pa.y);
+        ctx.lineTo(pb.x, pb.y);
+      }
+      ctx.stroke();
+
+      // Small dots at every joint
+      for (let i = 0; i < 21; i++) {
+        const pt = lmPx(landmarks[i], fit);
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(200,200,200,0.7)';
+        ctx.fill();
+      }
+
+      // Colored lines from thumb to each fingertip
+      PARAMS.forEach(p => {
+        const tip = lmPx(landmarks[p.idx], fit);
+        ctx.beginPath();
+        ctx.moveTo(tip.x, tip.y);
+        ctx.lineTo(thumb.x, thumb.y);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, DOT_R, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+      });
+
+      ctx.beginPath();
+      ctx.arc(thumb.x, thumb.y, DOT_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFDD00';
+      ctx.fill();
+
+      
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      PARAMS.forEach(p => {
+        const tip = lmPx(landmarks[p.idx], fit);
+        const mx = tip.x;
+        const my = tip.y - DOT_R - 18;
+        const hz   = Math.round(currentPitchHz);
+        const text = (p.idx === 12)
+          ? `Size ${Math.round((2.0 - (Math.max(0, Math.min(1, (Math.hypot(landmarks[THUMB_IDX].x - landmarks[12].x, landmarks[THUMB_IDX].y - landmarks[12].y) / handScale(landmarks) - PITCH_REL_MIN) / (PITCH_REL_MAX - PITCH_REL_MIN))) * 1.9)) * 100)}%`
+          : p.label;
+        const tw = ctx.measureText(text).width, pad = 8, bh = 28;
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.fillRect(mx - tw/2 - pad, my - bh/2, tw + pad*2, bh);
+        ctx.fillStyle = p.color;
+        ctx.fillText(text, mx, my + 1);
+      });
+    }
+
+    function drawWaveform() {
+      const wh   = Math.floor(canvas.height * 0.10);
+      const wy   = canvas.height - wh;
+      const half = canvas.width / 2;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.78)';
+      ctx.fillRect(0, wy, canvas.width, wh);
+
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 1;
+      ctx.moveTo(half, wy);
+      ctx.lineTo(half, wy + wh);
+      ctx.stroke();
+
+      if (!waveAnalyser || !fftAnalyser) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.moveTo(0, wy + wh / 2);
+        ctx.lineTo(canvas.width, wy + wh / 2);
+        ctx.stroke();
+        return;
+      }
+
+      // Left half: oscilloscope (waveform)
+      const waveVals = waveAnalyser.getValue();
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, wy, half, wh); ctx.clip();
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = 1.5;
+      const wStep = half / (waveVals.length - 1);
+      for (let i = 0; i < waveVals.length; i++) {
+        const x = i * wStep;
+        const y = wy + wh / 2 + waveVals[i] * (wh / 2) * 0.85;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Right half: FFT spectrum, log 20 Hz – 25 kHz
+      const fftVals = fftAnalyser.getValue();
+      const numBins = fftVals.length;
+      const nyquist = Tone.context.sampleRate / 2;
+      const logMin  = Math.log(20);
+      const logMax  = Math.log(Math.min(25000, nyquist));
+
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = 1.5;
+      for (let px = 0; px < half; px++) {
+        const freq = Math.exp(logMin + (px / (half - 1)) * (logMax - logMin));
+        const bin  = Math.min(numBins - 1, Math.round(freq / nyquist * numBins));
+        const amp  = Math.max(0, (fftVals[bin] + 80) / 80);
+        const x    = half + px;
+        const y    = wy + wh - amp * wh * 0.92;
+        px === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // ── Fist: all 4 fingers curled closer to wrist than their MCP ────────
+    function isFistClosed(landmarks) {
+      const wrist = landmarks[0];
+      const pairs = [
+        { tip: 8,  mcp: 5  },
+        { tip: 12, mcp: 9  },
+        { tip: 16, mcp: 13 },
+        { tip: 20, mcp: 17 },
+      ];
+      let curled = 0;
+      for (const { tip, mcp } of pairs) {
+        const tipD = Math.hypot(landmarks[tip].x - wrist.x, landmarks[tip].y - wrist.y);
+        const mcpD = Math.hypot(landmarks[mcp].x - wrist.x, landmarks[mcp].y - wrist.y);
+        if (tipD < mcpD) curled++;
+      }
+      return curled >= 4;
+    }
+
+    function onResults(results) {
+      const fit = coverFit();
+      if (!fit) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#0e1528';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      handDetected = !!(results.multiHandLandmarks?.length);
+
+      let anyFist = false;
+      if (handDetected) {
+        results.multiHandLandmarks.forEach(hand => {
+          if (isFistClosed(hand)) anyFist = true;
+          drawHand(hand, fit);
+          updateRate(hand);
+          updatePitch(hand);
+        });
+      } else {
+        // No hands detected - ensure conductor data has default values for spawning
+        window.conductorData.rateNorm = 0.5;
+        window.conductorData.shouldSpawnBalls = true;
+      }
+
+      if (anyFist !== fistMuted) {
+        fistMuted = anyFist;
+        setGain();
+      }
+
+      if (fistMuted) {
+        ctx.save();
+        ctx.font = 'bold 28px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const label = 'MUTED';
+        const tw = ctx.measureText(label).width;
+        const px = canvas.width / 2, py = 40;
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(px - tw / 2 - 14, py - 20, tw + 28, 40);
+        ctx.fillStyle = '#FF3355';
+        ctx.fillText(label, px, py);
+        ctx.restore();
+      }
+
+      drawWaveform();
+    }
+
+    // ── MediaPipe Hands for the left pane ─────────────────────────────────
+    const gestureHands = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
+    });
+    gestureHands.setOptions({
+      maxNumHands: 1, modelComplexity: 1,
+      minDetectionConfidence: 0.5, minTrackingConfidence: 0.5,
+    });
+    gestureHands.onResults(onResults);
+
+    async function startGestureInstrument() {
+      try {
+        await gestureHands.initialize();
+        statusEl.textContent = '';
+        // Wait for the left-pane camera to be ready
+        await window.LEFT_CAMERA_READY;
+
+        async function loop() {
+          const now = performance.now();
+          if (audioReady && Tone.context.state === 'running' && handDetected &&
+              now >= nextTriggerAt && currentRateNorm < RATE_SILENCE_THRESHOLD) {
+            triggerSound();
+            nextTriggerAt = now + currentRateMs;
+          }
+          if (video.readyState >= 2) await gestureHands.send({ image: video });
+          requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        console.error(e);
+      }
+    }
+
+    startGestureInstrument();
+  })();
+  </script>
+
+</body>
+</html>

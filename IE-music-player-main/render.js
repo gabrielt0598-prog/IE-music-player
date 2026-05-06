@@ -11,9 +11,14 @@ const Renderer = (() => {
   let fpsEl    = null;
   let fpsAccum = 0;
   let fpsTicks = 0;
-  let startTime      = 0;
-  let gameOver        = false;
-  let lastHandCenters = [];
+  let startTime        = 0;
+  let gameOver         = false;
+  let lastHandCenters  = [];
+  let smoothedCenters  = [];
+  let hudScoreEl  = null;
+  let hudTimerEl  = null;
+  let gameOverEl  = null;
+  let goScoreEl   = null;
   const barHeights = Array.from({ length: 8 }, (_, i) => 4 + Math.round(Math.sin(i * 1.4 + 0.5) * 6 + 8));
 
   // ── offscreen canvases for ASCII body filter ───────────────────────────
@@ -22,18 +27,15 @@ const Renderer = (() => {
   let maskCanvas = null;   // segmentation mask sample
   let maskCtx    = null;
 
-  // ── bucket style ──────────────────────────────────────────────────────────
-  const STYLE_NAMES    = ['Orbit', 'Signal', 'Scan', 'Grid', 'Pulse'];
-  let bucketStyleIndex = 4;
-
-  // ── background color (set by pinch gesture) ───────────────────────────────
-  let bgColor = [0, 0, 0];
+  // ── background color ──────────────────────────────────────────────────────
+  let bgColor = [26, 8, 18];
 
   function setBgMode(rgb) { bgColor = rgb; }
 
   // particles: [{x,y,vx,vy,life,maxLife,color}]
   const particles = [];
   const MAX_PARTICLES = 200;
+  const catchTexts    = [];
 
   // ── particle system (monochrome) ───────────────────────────────────────────
   function spawnParticles(pos) {
@@ -51,45 +53,34 @@ const Renderer = (() => {
     }
   }
 
-  // ── draw a ball — wireframe monochrome ───────────────────────────────────
+  // ── draw a ball — teardrop with gradient trail ───────────────────────────
   function drawBall(ball) {
     const { x, y } = ball.position;
-    const r = ball.circleRadius || 16;
+    const r        = ball.circleRadius || 16;
+    const trailH   = r * 4;
 
-    // broad soft glow (bloom)
-    const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
-    grd.addColorStop(0,   'rgba(255,255,255,0.13)');
-    grd.addColorStop(0.4, 'rgba(255,255,255,0.05)');
-    grd.addColorStop(1,   'transparent');
+    // Soft gradient trail above the ball
+    const trail = ctx.createLinearGradient(0, y - trailH, 0, y - r);
+    trail.addColorStop(0, 'rgba(255,255,255,0)');
+    trail.addColorStop(1, 'rgba(255,255,255,0.35)');
     ctx.beginPath();
-    ctx.arc(x, y, r * 3, 0, Math.PI * 2);
+    ctx.roundRect(x - r * 0.7, y - trailH, r * 1.4, trailH, r * 0.7);
+    ctx.fillStyle = trail;
+    ctx.fill();
+
+    // Soft glow
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 2);
+    grd.addColorStop(0, 'rgba(255,255,255,0.18)');
+    grd.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(x, y, r * 2, 0, Math.PI * 2);
     ctx.fillStyle = grd;
     ctx.fill();
 
-    // solid opaque white ball body
+    // Solid ball
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.fill();
-
-    // bright rim for definition
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,1)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // inner detail ring
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(180,200,255,0.4)';
-    ctx.lineWidth = 0.75;
-    ctx.stroke();
-
-    // center dot
-    ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(180,210,255,0.9)';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
     ctx.fill();
   }
 
@@ -111,19 +102,22 @@ const Renderer = (() => {
       if (rp.alpha < 0.008) { ripples.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,255,255,${rp.alpha.toFixed(3)})`;
+      ctx.strokeStyle = `rgba(255,45,120,${rp.alpha.toFixed(3)})`;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
   }
 
-  // ── bucket geometry constants ────────────────────────────────────────────
-  const BUCKET_OPEN_W  = 160;  // opening width (top)
-  const BUCKET_CLOSE_W = 128;  // base width (bottom, narrower = trapezoid)
-  const BUCKET_H       = 60;   // height
-  const BUCKET_MARGIN  = 18;   // gap from screen bottom
+  // ── bucket style ──────────────────────────────────────────────────────────
+  const STYLE_NAMES    = ['Orbit', 'Signal', 'Scan', 'Grid', 'Pulse'];
+  let bucketStyleIndex = 4;
 
-  // Returns the 4 key points of the bucket given its center X
+  // ── bucket geometry constants ────────────────────────────────────────────
+  const BUCKET_OPEN_W  = 170;
+  const BUCKET_CLOSE_W = 135;
+  const BUCKET_H       = 55;
+  const BUCKET_MARGIN  = 18;
+
   function bucketGeom(cx) {
     const botY = canvas.height - BUCKET_MARGIN;
     const topY = botY - BUCKET_H;
@@ -132,7 +126,6 @@ const Renderer = (() => {
     return { cx, botY, topY, ho, hb };
   }
 
-  // Draw the 3 bucket walls (left, bottom, right) — open at top
   function strokeBucket(g) {
     ctx.beginPath();
     ctx.moveTo(g.cx - g.ho, g.topY);
@@ -142,7 +135,6 @@ const Renderer = (() => {
     ctx.stroke();
   }
 
-  // Fill the closed trapezoid interior
   function fillBucket(g) {
     ctx.beginPath();
     ctx.moveTo(g.cx - g.ho, g.topY);
@@ -153,7 +145,6 @@ const Renderer = (() => {
     ctx.fill();
   }
 
-  // Rim dashes across the opening
   function drawRim(g, extend) {
     const e = extend || 0;
     ctx.beginPath();
@@ -164,7 +155,6 @@ const Renderer = (() => {
     ctx.stroke();
   }
 
-  // ── style 0: Plasma ───────────────────────────────────────────────────────
   function drawPlasma(cx) {
     const g = bucketGeom(cx);
     ctx.save();
@@ -172,14 +162,12 @@ const Renderer = (() => {
     ctx.shadowColor = 'rgba(255,255,255,0.9)';
     ctx.strokeStyle = 'rgba(255,255,255,0.92)';
     ctx.lineWidth   = 3;
-    strokeBucket(g);
-    drawRim(g, 6);
+    strokeBucket(g); drawRim(g, 6);
     ctx.restore();
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
     fillBucket(g);
   }
 
-  // ── style 1: Fire ─────────────────────────────────────────────────────────
   function drawFire(cx, now) {
     const g  = bucketGeom(cx);
     const f1 = 0.6 + 0.4 * Math.sin(now * 0.012);
@@ -189,63 +177,42 @@ const Renderer = (() => {
     ctx.shadowColor = `rgba(200,180,255,${(0.9 * f1).toFixed(2)})`;
     ctx.strokeStyle = `rgba(${Math.round(180 + 50 * f2)},${Math.round(160 + 60 * f2)},255,${(0.9 * f1).toFixed(2)})`;
     ctx.lineWidth   = 2.5 + f1;
-    strokeBucket(g);
-    drawRim(g, 8);
+    strokeBucket(g); drawRim(g, 8);
     ctx.restore();
     ctx.fillStyle = `rgba(160,140,255,${(0.06 * f1 + 0.03).toFixed(3)})`;
     fillBucket(g);
   }
 
-  // ── style 2: Ice ──────────────────────────────────────────────────────────
   function drawIce(cx) {
     const g = bucketGeom(cx);
     ctx.save();
-    ctx.shadowBlur     = 20;
-    ctx.shadowColor    = 'rgba(255,255,255,0.85)';
-    ctx.strokeStyle    = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth      = 2.5;
-    ctx.setLineDash([8, 5]);
-    strokeBucket(g);
-    ctx.strokeStyle    = 'rgba(200,210,255,0.55)';
-    ctx.lineWidth      = 1;
-    ctx.setLineDash([4, 8]);
-    ctx.lineDashOffset = 6;
-    strokeBucket(g);
-    ctx.setLineDash([]);
-    ctx.lineWidth      = 3;
-    ctx.strokeStyle    = 'rgba(255,255,255,0.92)';
+    ctx.shadowBlur = 20; ctx.shadowColor = 'rgba(255,255,255,0.85)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2.5;
+    ctx.setLineDash([8, 5]); strokeBucket(g);
+    ctx.strokeStyle = 'rgba(200,210,255,0.55)'; ctx.lineWidth = 1;
+    ctx.setLineDash([4, 8]); ctx.lineDashOffset = 6; strokeBucket(g);
+    ctx.setLineDash([]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.92)';
     drawRim(g, 6);
     ctx.restore();
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    fillBucket(g);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; fillBucket(g);
   }
 
-  // ── style 3: Retro ────────────────────────────────────────────────────────
   function drawRetro(cx) {
     const g = bucketGeom(cx);
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth   = 2;
-    ctx.setLineDash([6, 4]);
-    strokeBucket(g);
-    ctx.setLineDash([]);
-    ctx.lineWidth = 3;
-    drawRim(g, 10);
-    // corner ticks on rim ends
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]); strokeBucket(g);
+    ctx.setLineDash([]); ctx.lineWidth = 3; drawRim(g, 10);
     [[g.cx - g.ho, g.topY, g.cx - g.ho, g.topY + 10],
      [g.cx + g.ho, g.topY, g.cx + g.ho, g.topY + 10]].forEach(([x1,y1,x2,y2]) => {
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     });
     ctx.restore();
-    ctx.fillStyle = 'rgba(255,255,255,0.04)';
-    fillBucket(g);
-    // scanlines inside trapezoid
+    ctx.fillStyle = 'rgba(255,255,255,0.04)'; fillBucket(g);
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    ctx.lineWidth   = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
     for (let ly = g.topY + 6; ly < g.botY; ly += 7) {
-      const t  = (ly - g.topY) / (g.botY - g.topY);
+      const t = (ly - g.topY) / (g.botY - g.topY);
       const lx = g.cx - g.ho + (g.ho - g.hb) * t;
       const rx = g.cx + g.ho - (g.ho - g.hb) * t;
       ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(rx, ly); ctx.stroke();
@@ -253,7 +220,6 @@ const Renderer = (() => {
     ctx.restore();
   }
 
-  // ── style 4: Ghost ────────────────────────────────────────────────────────
   function drawGhost(cx, now) {
     const g     = bucketGeom(cx);
     const pulse = 0.5 + 0.5 * Math.sin(now * 0.004);
@@ -262,8 +228,7 @@ const Renderer = (() => {
     ctx.shadowColor = `rgba(255,255,255,${(0.9 * pulse).toFixed(2)})`;
     ctx.strokeStyle = `rgba(255,255,255,${(0.5 + 0.45 * pulse).toFixed(2)})`;
     ctx.lineWidth   = 2.5 + pulse;
-    strokeBucket(g);
-    drawRim(g, 8);
+    strokeBucket(g); drawRim(g, 8);
     ctx.restore();
     const grd = ctx.createLinearGradient(g.cx, g.topY, g.cx, g.botY);
     grd.addColorStop(0, `rgba(255,255,255,${(0.1 * pulse).toFixed(3)})`);
@@ -272,7 +237,6 @@ const Renderer = (() => {
     fillBucket(g);
   }
 
-  // ── bucket dispatcher ─────────────────────────────────────────────────────
   function drawBucket(centerX, now) {
     switch (bucketStyleIndex) {
       case 0: drawPlasma(centerX);       break;
@@ -282,6 +246,7 @@ const Renderer = (() => {
       case 4: drawGhost(centerX, now);   break;
     }
   }
+
 
   // ── ASCII body filter (uses SelfieSegmentation mask) ──────────────────────
   const ASCII_COLS  = 130;  // more columns = smaller chars
@@ -398,50 +363,20 @@ const Renderer = (() => {
     ctx.restore();
   }
 
-  // ── HUD: score (left) + 1-min countdown (right) + decorations ─────────────
+  // ── HUD: updates the center DOM panel ─────────────────────────────────────
   function drawHUD(W, H, now) {
     const elapsed   = now - startTime;
-    const remaining = Math.max(0, 60000 - elapsed);
-    const remM  = String(Math.floor(remaining / 60000)).padStart(2, '0');
-    const remS  = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
-    const urgent = remaining < 10000 && remaining > 0; // last 10 s
-
-    ctx.save();
-    ctx.textBaseline = 'top';
-
-    // ── TOP-LEFT: SCORE ──────────────────────────────────────────────────────
-    ctx.textAlign = 'left';
-    ctx.font      = '9px monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.32)';
-    ctx.fillText('SCORE', 26, 22);
-    ctx.font      = 'bold 48px monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.96)';
-    ctx.fillText(String(PhysicsEngine.score).padStart(5, '0'), 26, 35);
-
-    // ── TOP-RIGHT: COUNTDOWN TIMER ───────────────────────────────────────────
-    ctx.textAlign = 'right';
-    ctx.font      = '9px monospace';
-    ctx.fillStyle = urgent ? 'rgba(255,120,100,0.75)' : 'rgba(255,255,255,0.32)';
-    ctx.fillText('TIME', W - 26, 22);
-    const timerAlpha = urgent ? (0.6 + 0.4 * Math.sin(now * 0.012)) : 0.96;
-    ctx.font      = 'bold 48px monospace';
-    ctx.fillStyle = urgent
-      ? `rgba(255,120,100,${timerAlpha.toFixed(3)})`
-      : `rgba(255,255,255,${timerAlpha.toFixed(3)})`;
-    ctx.fillText(`${remM}:${remS}`, W - 26, 35);
-
-    // ── small decorations below score / timer ────────────────────────────────
-    ctx.textAlign = 'left';
-    ctx.font      = '9px monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    ctx.fillText('ACTIVE  ' + String(PhysicsEngine.balls.length).padStart(2, '0'), 26, 92);
-
-    ctx.textAlign = 'right';
-    ctx.font      = '9px monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    ctx.fillText(remaining > 0 ? 'RUNNING' : 'COMPLETE', W - 26, 92);
-
-    ctx.restore();
+    const remaining = Math.max(0, 90000 - elapsed);
+    const remM = String(Math.floor(remaining / 60000)).padStart(2, '0');
+    const remS = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+    if (hudScoreEl) hudScoreEl.textContent = PhysicsEngine.score;
+    if (hudTimerEl) {
+      hudTimerEl.textContent = `${remM}:${remS}`;
+      const urgent = remaining < 10000 && remaining > 0;
+      hudTimerEl.style.opacity = urgent
+        ? (0.6 + 0.4 * Math.sin(now * 0.012)).toFixed(3)
+        : '1';
+    }
   }
 
   // ── game-over overlay ─────────────────────────────────────────────────────
@@ -512,6 +447,27 @@ const Renderer = (() => {
     }
   }
 
+  // ── +1 catch text ──────────────────────────────────────────────────────────
+  function spawnCatchText(pos) {
+    catchTexts.push({ x: pos.x, y: pos.y - 20, life: 1.0 });
+  }
+
+  function drawCatchTexts(dt) {
+    for (let i = catchTexts.length - 1; i >= 0; i--) {
+      const t = catchTexts[i];
+      t.life -= dt * 0.016;
+      t.y    -= 1.8;
+      if (t.life <= 0) { catchTexts.splice(i, 1); continue; }
+      ctx.save();
+      ctx.font         = 'bold 26px "Courier New", monospace';
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle    = `rgba(255,255,255,${t.life.toFixed(3)})`;
+      ctx.fillText('+1', t.x + 28, t.y);
+      ctx.restore();
+    }
+  }
+
   // ── main draw ─────────────────────────────────────────────────────────────
   function draw(now) {
     const dt = Math.min((now - lastTime) / 16.67, 3);
@@ -535,8 +491,15 @@ const Renderer = (() => {
     // buckets — persist last known positions; freeze when game is over
     const fresh = Vision.getHandCenters();
     if (!gameOver && fresh.length > 0) lastHandCenters = fresh;
-    const activeCenters = lastHandCenters.length > 0 ? lastHandCenters : [W / 2];
-    for (const cx of activeCenters) drawBucket(cx, now);
+    const targetCenters = lastHandCenters.length > 0 ? lastHandCenters : [W / 2];
+
+    // Lerp smoothed positions toward targets each frame to remove jitter
+    if (smoothedCenters.length !== targetCenters.length) {
+      smoothedCenters = [...targetCenters];
+    } else {
+      smoothedCenters = smoothedCenters.map((sc, i) => sc + (targetCenters[i] - sc) * 0.25);
+    }
+    for (const cx of smoothedCenters) drawBucket(cx, now);
 
     // balls
     for (const ball of PhysicsEngine.balls) {
@@ -546,17 +509,18 @@ const Renderer = (() => {
     // particles
     drawParticles(dt);
     drawRipples();
+    drawCatchTexts(dt);
 
-    // HUD readouts + corner brackets (drawn last, always on top)
+    // HUD readouts (updates DOM panel)
     drawHUD(W, H, now);
-    drawCornerBrackets(W, H);
 
     // game-over check
-    if (!gameOver && now - startTime >= 60000) {
+    if (!gameOver && now - startTime >= 90000) {
       gameOver = true;
       PhysicsEngine.stopSpawning();
+      if (goScoreEl)  goScoreEl.textContent  = PhysicsEngine.score;
+      if (gameOverEl) gameOverEl.style.display = 'flex';
     }
-    if (gameOver) drawGameOver(W, H);
   }
 
   // ── public ─────────────────────────────────────────────────────────────────
@@ -565,6 +529,10 @@ const Renderer = (() => {
     ctx     = canvas.getContext('2d');
     videoEl = video;
     fpsEl   = document.getElementById('fps');
+    hudScoreEl = document.getElementById('hud-score');
+    hudTimerEl = document.getElementById('hud-timer');
+    gameOverEl = document.getElementById('gameover-overlay');
+    goScoreEl  = document.getElementById('gameover-score');
 
     startTime = performance.now();
     PhysicsEngine.onCollision((ball, pos) => { spawnParticles(pos); });
@@ -574,13 +542,20 @@ const Renderer = (() => {
     draw(now);
   }
 
+  function isGameOver() { return gameOver; }
+  function resetTimer()  {
+    startTime = performance.now();
+    gameOver = false;
+    lastHandCenters = [];
+    smoothedCenters = [];
+    catchTexts.length = 0;
+    if (gameOverEl) gameOverEl.style.display = 'none';
+  }
+
   function nextBucketStyle() {
     bucketStyleIndex = (bucketStyleIndex + 1) % STYLE_NAMES.length;
     return STYLE_NAMES[bucketStyleIndex];
   }
 
-  function isGameOver() { return gameOver; }
-  function resetTimer()  { startTime = performance.now(); gameOver = false; lastHandCenters = []; }
-
-  return { init, frame, spawnRipple, setBgMode, nextBucketStyle, isGameOver, resetTimer };
+  return { init, frame, spawnRipple, spawnCatchText, setBgMode, nextBucketStyle, isGameOver, resetTimer };
 })();

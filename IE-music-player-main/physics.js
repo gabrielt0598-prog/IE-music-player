@@ -15,7 +15,7 @@ const PhysicsEngine = (() => {
 
   // ── constants ──────────────────────────────────────────────────────────────
   const MAX_BALLS       = 40;
-  const BALL_INTERVAL   = 800;   // ms between spawns
+  const DEFAULT_BALL_INTERVAL = 800;   // default ms between spawns
   const BALL_RADIUS_MIN = 14;
   const BALL_RADIUS_MAX = 20;
   const BURST_COUNT     = 10;
@@ -31,6 +31,12 @@ const PhysicsEngine = (() => {
   let score          = 0;
   const catchHandlers    = [];
 
+  // Dynamic spawn rate state
+  let currentSpawnInterval = DEFAULT_BALL_INTERVAL;
+  let shouldSpawnBalls = true;
+  let lastSpawnRateUpdate = 0;
+  let lastSpawnTime = 0;  // Track last spawn time for continuous control
+
   // ── walls ──────────────────────────────────────────────────────────────────
   function buildWalls(w, h) {
     wallBodies.forEach(b => World.remove(world, b));
@@ -40,6 +46,41 @@ const PhysicsEngine = (() => {
       Bodies.rectangle(w + 25, h / 2, 50, h + 100, opts),   // right
     ];
     World.add(world, wallBodies);
+  }
+
+  // ── dynamic spawn rate control ─────────────────────────────────────────────
+  function updateSpawnRate(rateNorm, shouldSpawn) {
+    // Continuous mapping: close fingers (low rateNorm) = more balls, far fingers (high rateNorm) = fewer balls
+    // Rate 0 (close/pinched): 333ms = 180 balls/minute (hardest), Rate 1 (far): 2000ms = 30 balls/minute (easiest)
+    const minInterval = 333;  // 180 balls/minute (hardest)
+    const maxInterval = 2000; // 30 balls/minute (easiest)
+    
+    // Reverse the mapping: (1 - rateNorm) instead of rateNorm
+    const newInterval = maxInterval - ((1 - rateNorm) * (maxInterval - minInterval));
+    const newShouldSpawn = shouldSpawn;
+
+    // Only update if values actually changed to avoid thrashing
+    if (Math.abs(newInterval - currentSpawnInterval) > 20 || newShouldSpawn !== shouldSpawnBalls) {
+      currentSpawnInterval = newInterval;
+      shouldSpawnBalls = newShouldSpawn;
+      
+      // Clear existing timer
+      if (spawnTimer !== null) {
+        clearInterval(spawnTimer);
+        spawnTimer = null;
+      }
+      
+      if (shouldSpawnBalls) {
+        // Start continuous spawning with single timer
+        spawnTimer = setInterval(() => {
+          const now = performance.now();
+          if (shouldSpawnBalls && now - lastSpawnTime >= currentSpawnInterval) {
+            spawnBall();
+            lastSpawnTime = now;
+          }
+        }, 50); // Check every 50ms for smooth continuous control
+      }
+    }
   }
 
   // ── ball helpers ───────────────────────────────────────────────────────────
@@ -56,7 +97,10 @@ const PhysicsEngine = (() => {
       World.remove(world, oldest);
     }
 
-    const r = BALL_RADIUS_MIN + Math.random() * (BALL_RADIUS_MAX - BALL_RADIUS_MIN);
+    // Use dynamic ball size from conductor data, with some randomization
+    const baseRadius = BALL_RADIUS_MIN + Math.random() * (BALL_RADIUS_MAX - BALL_RADIUS_MIN);
+    const sizeMultiplier = (window.conductorData && window.conductorData.ballSize) ? window.conductorData.ballSize : 1.0;
+    const r = baseRadius * sizeMultiplier;
     const x = r + Math.random() * (canvasW - r * 2);
     const ball = Bodies.circle(x, -r - 5, r, {
       restitution : 0.55,
@@ -84,8 +128,8 @@ const PhysicsEngine = (() => {
   }
 
   // ── bucket constants (must match render.js) ────────────────────────────────
-  const BUCKET_OPEN_W = 160;
-  const BUCKET_H      = 60;
+  const BUCKET_OPEN_W = 170;
+  const BUCKET_H      = 55;
   const BUCKET_MARGIN = 18;
 
   // ── bucket catch check ─────────────────────────────────────────────────
@@ -155,7 +199,16 @@ const PhysicsEngine = (() => {
     canvasW = w;
     canvasH = h;
     buildWalls(w, h);
-    spawnTimer = setInterval(spawnBall, BALL_INTERVAL);
+    lastSpawnTime = performance.now();
+    if (shouldSpawnBalls) {
+      spawnTimer = setInterval(() => {
+        const now = performance.now();
+        if (shouldSpawnBalls && now - lastSpawnTime >= currentSpawnInterval) {
+          spawnBall();
+          lastSpawnTime = now;
+        }
+      }, 50);
+    }
   }
 
   function resize(w, h) {
@@ -165,7 +218,10 @@ const PhysicsEngine = (() => {
   }
 
   function stopSpawning() {
-    if (spawnTimer !== null) { clearInterval(spawnTimer); spawnTimer = null; }
+    if (spawnTimer !== null) {
+      clearInterval(spawnTimer);
+      spawnTimer = null;
+    }
   }
 
   function reset() {
@@ -173,7 +229,16 @@ const PhysicsEngine = (() => {
     balls.forEach(b => World.remove(world, b));
     balls = [];
     score = 0;
-    spawnTimer = setInterval(spawnBall, BALL_INTERVAL);
+    lastSpawnTime = 0;
+    if (shouldSpawnBalls) {
+      spawnTimer = setInterval(() => {
+        const now = performance.now();
+        if (shouldSpawnBalls && now - lastSpawnTime >= currentSpawnInterval) {
+          spawnBall();
+          lastSpawnTime = now;
+        }
+      }, 50);
+    }
   }
 
   function toggleWind() {
@@ -198,6 +263,7 @@ const PhysicsEngine = (() => {
     stopSpawning,
     reset,
     toggleWind,
+    updateSpawnRate,
     onCollision(fn) { collisionHandlers.push(fn); },
     onCatch(fn)     { catchHandlers.push(fn); },
   };
