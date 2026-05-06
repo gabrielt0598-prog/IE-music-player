@@ -67,6 +67,17 @@
       overflow: hidden;
     }
     .cam-select:hover { border-color: rgba(255,255,255,0.75); color: #fff; }
+    .cam-refresh {
+      background: transparent;
+      border: 1.5px solid rgba(255,255,255,0.35);
+      color: rgba(255,255,255,0.55);
+      font-size: 13px;
+      line-height: 1;
+      padding: 3px 7px;
+      cursor: pointer;
+      font-family: monospace;
+    }
+    .cam-refresh:hover { border-color: rgba(255,255,255,0.75); color: #fff; }
     #left-cam-picker  { left: 18px; top: 100px; }
     #right-cam-picker { right: 18px; top: 18px; }
   `;
@@ -113,7 +124,8 @@
     wrap.id = wrapperId;
     wrap.innerHTML =
       `<span class="cam-label">CAM</span>` +
-      `<select class="cam-select" id="${selectId}"><option>Detecting…</option></select>`;
+      `<select class="cam-select" id="${selectId}"><option>Detecting…</option></select>` +
+      `<button class="cam-refresh" title="Refresh camera list" onclick="window.refreshCameras()">↺</button>`;
     return wrap;
   }
 
@@ -123,46 +135,72 @@
   if (rightPane) rightPane.appendChild(makePicker('right-cam-picker', 'right-cam-select'));
 
   // ── 6. Camera setup ───────────────────────────────────────────────────────
-  // LEFT_CAMERA_READY: camera 0 is already started by the original CAMERA_READY
-  // block in index.html — just alias it.
   window.LEFT_CAMERA_READY = window.CAMERA_READY;
+
+  // ── refreshCameras — repopulates both dropdowns; called on load + ↺ button + devicechange
+  window.refreshCameras = async function() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams    = devices.filter(d => d.kind === 'videoinput');
+    console.log('[DualCamera] Cameras found:', cams.map((c, i) => c.label || `Camera ${i + 1}`));
+    if (cams.length === 0) return;
+
+    const leftSel  = document.getElementById('left-cam-select');
+    const rightSel = document.getElementById('right-cam-select');
+    const prevLeft  = leftSel?.value;
+    const prevRight = rightSel?.value;
+
+    [leftSel, rightSel].forEach(sel => {
+      if (!sel) return;
+      sel.innerHTML = '';
+      cams.forEach((cam, i) => {
+        const opt = document.createElement('option');
+        opt.value       = cam.deviceId;
+        opt.textContent = cam.label || `Camera ${i + 1}`;
+        sel.appendChild(opt);
+      });
+    });
+
+    // Restore previous selection if the device is still present; otherwise default
+    if (leftSel)  leftSel.value  = cams.find(c => c.deviceId === prevLeft)  ? prevLeft  : cams[0].deviceId;
+    if (rightSel) rightSel.value = cams.find(c => c.deviceId === prevRight) ? prevRight : (cams[1] ?? cams[0]).deviceId;
+  };
+
+  // Auto-refresh list whenever a camera is plugged in or unplugged.
+  // Debounced so openCamera() triggering devicechange doesn't cause a loop.
+  let _dcTimer = null;
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    clearTimeout(_dcTimer);
+    _dcTimer = setTimeout(window.refreshCameras, 400);
+  });
 
   // RIGHT_CAMERA_READY: wait for permission, then open camera 1 on #right-webcam.
   window.RIGHT_CAMERA_READY = (async () => {
-    await window.CAMERA_READY; // permission is already granted by the original startup
+    await window.CAMERA_READY;
 
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cams    = devices.filter(d => d.kind === 'videoinput');
-      if (cams.length === 0) return false;
+      // One-time unlock: a constraint-free getUserMedia tells Chrome to expose
+      // labels for all connected cameras, not just the one opened at startup.
+      try {
+        const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        tmp.getTracks().forEach(t => t.stop());
+      } catch (_) {}
+
+      await window.refreshCameras();
 
       const leftSel  = document.getElementById('left-cam-select');
       const rightSel = document.getElementById('right-cam-select');
 
-      // Populate both dropdowns with all available cameras
-      [leftSel, rightSel].forEach(sel => {
-        if (!sel) return;
-        sel.innerHTML = '';
-        cams.forEach((cam, i) => {
-          const opt = document.createElement('option');
-          opt.value       = cam.deviceId;
-          opt.textContent = cam.label || `Camera ${i + 1}`;
-          sel.appendChild(opt);
-        });
-      });
-
-      if (leftSel)  leftSel.value  = cams[0].deviceId;
-      if (rightSel) rightSel.value = (cams[1] ?? cams[0]).deviceId;
-
       if (leftSel)  leftSel.addEventListener('change',  () => window.switchCamera('left',  leftSel.value));
       if (rightSel) rightSel.addEventListener('change', () => window.switchCamera('right', rightSel.value));
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams    = devices.filter(d => d.kind === 'videoinput');
 
       if (cams.length >= 2) {
         await openCamera(rightVideo, cams[1].deviceId);
         console.log('[DualCamera] Two cameras connected —',
           cams[0].label || 'Camera 0', '/', cams[1].label || 'Camera 1');
       } else {
-        // Only one physical camera — share the left stream
         const leftVideo = document.getElementById('shared-webcam');
         if (leftVideo) {
           rightVideo.srcObject = leftVideo.srcObject;

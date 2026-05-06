@@ -12,8 +12,8 @@
 
   // ── canvas sizing ──────────────────────────────────────────────────────────
   function resizeCanvas() {
-    canvasEl.width  = canvasEl.offsetWidth;
-    canvasEl.height = canvasEl.offsetHeight;
+    canvasEl.width  = Math.floor(window.innerWidth / 2);
+    canvasEl.height = window.innerHeight;
     PhysicsEngine.resize(canvasEl.width, canvasEl.height);
     Vision.resize(canvasEl.width, canvasEl.height);
   }
@@ -81,10 +81,10 @@
   let melodyIdx = 0;
   let soundMode = 0;
   const SOUND_MODES = [
-    { name: 'Bell',  bg: [26, 8, 18]  },
-    { name: 'Pluck', bg: [22, 6, 24]  },
-    { name: 'Synth', bg: [30, 6, 14]  },
-    { name: 'Pad',   bg: [20, 10, 22] },
+    { name: 'Bell',  bg: [0, 0, 0]   },
+    { name: 'Pluck', bg: [0, 5, 18]  },
+    { name: 'Synth', bg: [8, 0, 18]  },
+    { name: 'Pad',   bg: [0, 12, 8]  },
   ];
 
   function playBell(freq) {
@@ -217,7 +217,7 @@
         fontSize     : '1rem',
         fontWeight   : '600',
         letterSpacing: '0.1em',
-        zIndex       : '700',
+        zIndex       : '300',
         pointerEvents: 'none',
         transition   : 'opacity 0.35s ease',
         whiteSpace   : 'nowrap',
@@ -270,7 +270,6 @@
 
     PhysicsEngine.onCatch((ball, pos) => {
       Renderer.spawnRipple(pos);
-      Renderer.spawnCatchText(pos);
       playCatch();
     });
 
@@ -325,18 +324,4 @@
   // ── wire up StartScreen + button ───────────────────────────────────────────
   StartScreen.init(launchGame);
   startBtn.addEventListener('click', () => launchGame());
-
-  // ── game over buttons ──────────────────────────────────────────────────────
-  document.getElementById('go-btn-yes').addEventListener('click', () => {
-    PhysicsEngine.reset();
-    Renderer.resetTimer();
-  });
-  document.getElementById('go-btn-no').addEventListener('click', () => {
-    document.getElementById('gameover-overlay').style.display = 'none';
-    overlay.classList.remove('fade-out');
-    overlay.style.display = 'flex';
-    startBtn.disabled    = false;
-    startBtn.textContent = 'Start Game';
-    launching = false;
-  });
 })();

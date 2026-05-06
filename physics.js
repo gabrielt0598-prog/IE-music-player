@@ -84,8 +84,8 @@ const PhysicsEngine = (() => {
   }
 
   // ── bucket constants (must match render.js) ────────────────────────────────
-  const BUCKET_OPEN_W = 170;
-  const BUCKET_H      = 55;
+  const BUCKET_OPEN_W = 160;
+  const BUCKET_H      = 60;
   const BUCKET_MARGIN = 18;
 
   // ── bucket catch check ─────────────────────────────────────────────────
