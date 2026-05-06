@@ -69,7 +69,7 @@ const Vision = (() => {
     });
 
     hands.onResults(results => {
-      handLandmarks = (results.multiHandLandmarks || []).slice(0, 1);
+      handLandmarks = results.multiHandLandmarks || [];
       pinchStates = handLandmarks.map(lm => {
         const dx = lm[4].x - lm[8].x;
         const dy = lm[4].y - lm[8].y;
@@ -150,12 +150,9 @@ const Vision = (() => {
   function getHandHulls() { return handHulls; }
 
   function getHandCenters() {
-    // Use the four finger-base knuckles (MCPs) rather than the full hull centroid,
-    // so the bucket tracks the palm opening rather than being pulled toward the wrist/arm.
-    return handLandmarks.map(lm => {
-      const pts = [5, 9, 13, 17].map(i => camToCanvas(lm[i].x, lm[i].y));
-      return pts.reduce((s, p) => s + p.x, 0) / pts.length;
-    });
+    return handHulls.map(hull =>
+      hull.reduce((s, p) => s + p.x, 0) / hull.length
+    );
   }
 
   function getSegmentationMask() { return segMask; }

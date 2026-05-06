@@ -174,9 +174,9 @@ const StartScreen = (() => {
     if (!canvas) return;
     ctx    = canvas.getContext('2d');
     curCtx = curCanvas ? curCanvas.getContext('2d') : canvas.getContext('2d');
-    canvas.width    = Math.floor(window.innerWidth / 2);
-    canvas.height   = window.innerHeight;
-    if (curCanvas) { curCanvas.width = Math.floor(window.innerWidth / 2); curCanvas.height = window.innerHeight; }
+    canvas.width    = canvas.offsetWidth    || Math.floor(window.innerWidth / 2);
+    canvas.height   = canvas.offsetHeight   || window.innerHeight;
+    if (curCanvas) { curCanvas.width = curCanvas.offsetWidth || canvas.width; curCanvas.height = curCanvas.offsetHeight || canvas.height; }
     initRain(canvas.width, canvas.height);
     animId = requestAnimationFrame(loop);
   }
